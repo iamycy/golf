@@ -103,6 +103,13 @@ def coeff_product(polynomials: Tensor) -> Tensor:
     c2 = coeff_product(polynomials[: n // 2])
     if c1.shape[1] > c2.shape[1]:
         c1, c2 = c2, c1
+    # outer = c1.unsqueeze(2) * c2.unsqueeze(1)
+    # prod = (
+    #     F.pad(outer, (0, c1.shape[1]))
+    #     .view(c1.shape[0], -1, c1.shape[1])[:, :-1]
+    #     .view(c1.shape[0], c1.shape[1], -1)
+    #     .sum(1)
+    # )
     weight = c1.unsqueeze(1).flip(2)
     prod = F.conv1d(
         c2.unsqueeze(0),
@@ -121,9 +128,11 @@ def get_logits2biquads(
 
         def logits2coeff(logits: Tensor) -> Tensor:
             assert logits.shape[-1] == 2
-            a1 = 2 * torch.tanh(logits[..., 0])
+            a1 = 2 * torch.tanh(logits[..., 0]) * max_abs_pole
             a1_abs = a1.abs()
-            a2 = 1 + 0.5 * a1_abs * (1 - torch.tanh(logits[..., 1]))
+            a2 = 0.5 * (
+                (2 - a1_abs) * torch.tanh(logits[..., 1]) * max_abs_pole + a1_abs
+            )
             return torch.stack([torch.ones_like(a1), a1, a2], dim=-1)
 
     elif rep_type == "conj":
@@ -134,6 +143,10 @@ def get_logits2biquads(
             phase = torch.sigmoid(logits[..., 1]) * torch.pi
             a1 = -2 * mag * torch.cos(phase)
             a2 = mag.square()
+            # real = torch.tanh(logits[..., 0]) * max_abs_pole
+            # imag = torch.tanh(logits[..., 1]) * max_abs_pole
+            # a1 = -2 * real
+            # a2 = real.square() + imag.square()
             return torch.stack([torch.ones_like(a1), a1, a2], dim=-1)
 
     elif rep_type == "real":
@@ -273,15 +286,19 @@ class MelGlottalVocoder(pl.LightningModule):
         self.logits2biquads = get_logits2biquads(lpc_coeff_rep, max_abs_pole)
         self.biquads2lpc_coeffs = get_biquads2lpc_coeffs(lpc)
 
-        self.model.dense_out.bias.data[:voice_lpc_order] = (
-            -10.0 if lpc_coeff_rep == "conj" else 0
-        )  # voice coeffs
+        self.model.dense_out.weight.data.zero_()
+        if lpc_coeff_rep == "conj":
+            self.model.dense_out.bias.data[:voice_lpc_order] = -10
+            self.model.dense_out.bias.data[
+                voice_lpc_order + 1 : voice_lpc_order + 1 + noise_lpc_order
+            ] = -10
+        elif lpc_coeff_rep == "real" or lpc_coeff_rep == "coef":
+            self.model.dense_out.bias.data[:voice_lpc_order] = 0
+            self.model.dense_out.bias.data[
+                voice_lpc_order + 1 : voice_lpc_order + 1 + noise_lpc_order
+            ] = 0
+
         self.model.dense_out.bias.data[voice_lpc_order] = 0.0  # gain
-        self.model.dense_out.bias.data[
-            voice_lpc_order + 1 : voice_lpc_order + 1 + noise_lpc_order
-        ] = (
-            -10.0 if lpc_coeff_rep == "conj" else 0
-        )  # noise coeffs
         self.model.dense_out.bias.data[
             voice_lpc_order + 1 + noise_lpc_order
         ] = -5.0  # noise gain

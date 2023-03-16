@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import math
 from typing import Callable
 
@@ -73,7 +74,7 @@ def get_radiation_time_filter(
 
 
 def get_window_fn(window: str = "hann"):
-    if window == "hann":
+    if window == "hanning":
         return torch.hann_window
     elif window == "hamming":
         return torch.hamming_window
@@ -83,3 +84,14 @@ def get_window_fn(window: str = "hann"):
         return torch.bartlett_window
     else:
         raise ValueError(f"Unknown window function {window}")
+
+
+def fir_filt(x: torch.Tensor, h: torch.Tensor):
+    """
+    x: (batch, seq_len)
+    h: (batch, seq_len, filter_len)
+    """
+    x = F.pad(x, (h.shape[-1] - 1, 0)).unfold(-1, h.shape[-1], 1)
+    return (
+        torch.matmul(x.unsqueeze(-2), h.flip(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
+    )

@@ -15,6 +15,7 @@ class GlottalFlowTable(nn.Module):
         table_type: str = "derivative",
         normalize_method: str = "constant_power",
         align_peak: bool = True,
+        trainable: bool = False,
         min_R_d: float = 0.3,
         max_R_d: float = 2.7,
         **kwargs,
@@ -62,7 +63,10 @@ class GlottalFlowTable(nn.Module):
         else:
             raise ValueError(f"unknown normalize_method: {normalize_method}")
 
-        self.register_buffer("table", table)
+        if trainable:
+            self.register_parameter("table", table)
+        else:
+            self.register_buffer("table", table)
 
     def forward(
         self, wrapped_phase: Tensor, table_select_weight: Tensor, hop_size: int

@@ -5,12 +5,15 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 from typing import List, Dict, Tuple, Callable, Union
 from torchaudio.transforms import MelSpectrogram
+from torchaudio.functional import lfilter, filtfilt
+import diffsptk
 import random
+from functools import reduce
 
 from models.synth import GlottalSynth, GlottalFlowTable
 from models.lpc import LPCSynth, BatchLPCSynth, BatchSecondOrderLPCSynth
 from models.mel import Mel2Control
-from models.utils import get_window_fn, get_radiation_time_filter
+from models.utils import get_window_fn, get_radiation_time_filter, fir_filt
 
 
 class WrappedMelSpectrogram(MelSpectrogram):
@@ -46,7 +49,17 @@ class MelVocoderCLI(LightningCLI):
         )
         parser.link_arguments("model.table_size", "model.glottal.init_args.table_size")
         parser.link_arguments(
-            "model.mel_trsfm.init_args.n_mels", "model.mel_model.init_args.in_channels"
+            (
+                "model.mel_trsfm.init_args.n_mels",
+                "model.enc_lpc_order",
+                "model.enc_channels",
+                "model.enc_stride",
+            ),
+            "model.mel_model.init_args.in_channels",
+            compute_fn=lambda n_mels, enc_lpc_order, enc_channels, enc_stride: n_mels
+            + enc_lpc_order
+            + 1
+            + enc_channels * 2 ** (len(enc_stride) - 1),
         )
         # parser.link_arguments(
         #     "model.coarser_model_hidden_size", "model.table_model.init_args.in_channels"
@@ -140,8 +153,9 @@ def get_logits2biquads(
         def logits2coeff(logits: Tensor) -> Tensor:
             assert logits.shape[-1] == 2
             mag = torch.sigmoid(logits[..., 0]) * max_abs_pole
-            phase = torch.sigmoid(logits[..., 1]) * torch.pi
-            a1 = -2 * mag * torch.cos(phase)
+            # phase = torch.sigmoid(logits[..., 1]) * torch.pi
+            cos = torch.tanh(logits[..., 1])
+            a1 = -2 * mag * cos
             a2 = mag.square()
             # real = torch.tanh(logits[..., 0]) * max_abs_pole
             # imag = torch.tanh(logits[..., 1]) * max_abs_pole
@@ -171,7 +185,7 @@ def get_biquads2lpc_coeffs(
     if isinstance(lpc_model, BatchLPCSynth):
         return lambda biquads: coeff_product(
             biquads.view(-1, *biquads.shape[-2:]).transpose(0, 1)
-        ).view(*biquads.shape[:2], -1)
+        ).view(*biquads.shape[:2], -1)[..., 1:]
     elif isinstance(lpc_model, BatchSecondOrderLPCSynth):
         return lambda biquads: biquads
     else:
@@ -208,10 +222,14 @@ class MelGlottalVocoder(pl.LightningModule):
         glottal: GlottalFlowTable,
         lpc: Union[BatchLPCSynth, BatchSecondOrderLPCSynth],
         mel_trsfm: WrappedMelSpectrogram,
-        window: str = "hann",
+        window: str = "hanning",
         voice_lpc_order: int = 16,
         noise_lpc_order: int = 22,
+        enc_lpc_order: int = 50,
+        enc_channels: int = 32,
+        enc_stride: List[int] = [5, 2, 2, 2, 2],
         lpc_coeff_rep: str = "conj",
+        src_smooth_alpha: float = 0.5,
         sample_rate: int = 16000,
         hop_length: int = 80,
         table_size: int = 100,
@@ -221,8 +239,14 @@ class MelGlottalVocoder(pl.LightningModule):
         max_abs_pole: float = 0.9,
         apply_radiation: bool = False,
         radiation_kernel_size: int = 256,
+        allpass_filter_order: int = 0,
+        l1_loss_weight: float = 0.0,
     ):
         super().__init__()
+
+        assert hop_length == reduce(
+            lambda x, y: x * y, enc_stride
+        ), f"Sum of strides ({sum(enc_stride)}) must be equal to hop_length ({hop_length})"
 
         self.model = mel_model
         self.criterion = criterion
@@ -264,6 +288,36 @@ class MelGlottalVocoder(pl.LightningModule):
                 kernel_size=1,
             ),
         )
+
+        modules = []
+        in_channels = 2
+        for stride in enc_stride:
+            modules += [
+                nn.Conv1d(
+                    in_channels=in_channels,
+                    out_channels=enc_channels,
+                    kernel_size=stride * 2 + 1,
+                    stride=stride,
+                    padding=stride,
+                ),
+                nn.ReLU(),
+                nn.Conv1d(
+                    in_channels=enc_channels,
+                    out_channels=enc_channels * 2,
+                    kernel_size=1,
+                ),
+                nn.GLU(dim=1),
+            ]
+            in_channels = enc_channels
+            enc_channels *= 2
+
+        self.src_encoder = nn.Sequential(*modules)
+        self.enc_lpc = nn.Sequential(
+            diffsptk.Frame(hop_length * 4, hop_length),
+            diffsptk.Window(hop_length * 4, window=window),
+            diffsptk.LPC(enc_lpc_order, hop_length * 4),
+        )
+
         self.coarser_mel_model[-1].weight.data.zero_()
         self.coarser_mel_model[-1].bias.data.zero_()
 
@@ -272,6 +326,7 @@ class MelGlottalVocoder(pl.LightningModule):
         self.hop_length = hop_length
         self.coarser_hop_length = hop_length * coarser_hop_rate
         self.max_abs_pole = max_abs_pole
+        self.l1_loss_weight = l1_loss_weight
         self.split_sizes = [
             voice_lpc_order,
             1,  # gain
@@ -287,10 +342,11 @@ class MelGlottalVocoder(pl.LightningModule):
         self.biquads2lpc_coeffs = get_biquads2lpc_coeffs(lpc)
 
         self.model.dense_out.weight.data.zero_()
+        self.model.dense_out.bias.data.uniform_(-5, 5)
         if lpc_coeff_rep == "conj":
-            self.model.dense_out.bias.data[:voice_lpc_order] = -10
+            self.model.dense_out.bias.data[:voice_lpc_order:2] = -10
             self.model.dense_out.bias.data[
-                voice_lpc_order + 1 : voice_lpc_order + 1 + noise_lpc_order
+                voice_lpc_order + 1 : voice_lpc_order + 1 + noise_lpc_order : 2
             ] = -10
         elif lpc_coeff_rep == "real" or lpc_coeff_rep == "coef":
             self.model.dense_out.bias.data[:voice_lpc_order] = 0
@@ -301,7 +357,40 @@ class MelGlottalVocoder(pl.LightningModule):
         self.model.dense_out.bias.data[voice_lpc_order] = 0.0  # gain
         self.model.dense_out.bias.data[
             voice_lpc_order + 1 + noise_lpc_order
-        ] = -5.0  # noise gain
+        ] = -10.0  # noise gain
+
+        self.register_buffer("src_smooth_a", torch.tensor([1, -src_smooth_alpha]))
+        self.register_buffer("src_smooth_b", torch.tensor([1.0, 0.0]))
+
+        if allpass_filter_order > 0:
+            init = torch.rand(allpass_filter_order // 2, 2) * 6 - 3
+            if lpc_coeff_rep == "conj":
+                init[:, 0] = -10.0
+            elif lpc_coeff_rep == "real" or lpc_coeff_rep == "coef":
+                init[:, 0] = 0.0
+            self.register_parameter(
+                "allpass_filter_logits",
+                nn.Parameter(init),
+            )
+
+    def enc_src_and_lpc(self, x):
+        with torch.cuda.amp.autocast(enabled=False):
+            lpc = self.enc_lpc(x.double().add(1e-7))
+        lpc = torch.nan_to_num(lpc, nan=0.0, posinf=0.0, neginf=0.0)
+        lpc = lpc.to(x.dtype)
+        batch, frames, order = lpc.shape
+        fir_weight = (
+            linear_upsample(lpc.transpose(1, 2).reshape(-1, frames), self.hop_length)
+            .view(batch, order, -1)
+            .transpose(1, 2)
+        )
+        gain = fir_weight[..., 0] + 1e-7
+        fir_weight[..., 0] = 1.0
+        src = fir_filt(x[:, : fir_weight.shape[1]], fir_weight) / gain
+        # smooth src, forward and backward
+        src.relu_()
+        src = filtfilt(src, self.src_smooth_a, self.src_smooth_b, clamp=False)
+        return src, lpc
 
     def x2log_mel(self, x):
         mel = self.mel_trsfm(x)
@@ -349,13 +438,26 @@ class MelGlottalVocoder(pl.LightningModule):
         instant_freq = f0_in_hz / self.sample_rate
         raw_phase = torch.cumsum(instant_freq, dim=1)
 
+        src, lpc = self.enc_src_and_lpc(x)
+        lpc = lpc.transpose(1, 2)
+        h = self.src_encoder(
+            torch.stack([src, raw_phase[:, : src.shape[1]] % 1], dim=1)
+        )
+        mel = self.x2log_mel(x)
+        frames = min(h.shape[2], lpc.shape[2], mel.shape[2])
+        feats = torch.cat(
+            [h[:, :, :frames], lpc[:, :, :frames], mel[:, :, :frames]], dim=1
+        )
+        # feats = torch.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
+        # assert torch.all(torch.isfinite(feats))
+
         (
             voice_biquads,
             voice_log_gain,
             noise_biquads,
             noise_log_gain,
             coarser_logits,
-        ) = self.get_control_params(self.x2log_mel(x))
+        ) = self.get_control_params(feats)
 
         voice_lpc_coeffs = self.biquads2lpc_coeffs(voice_biquads)
         noise_lpc_coeffs = self.biquads2lpc_coeffs(noise_biquads)
@@ -380,11 +482,18 @@ class MelGlottalVocoder(pl.LightningModule):
         glottal_flow = self.glottal(phase % 1, table_control, self.coarser_hop_length)
         noise = torch.randn_like(glottal_flow)
 
-        vocal = self.lpc(
-            glottal_flow, voice_log_gain.exp(), voice_lpc_coeffs
-        ) + self.lpc(noise, noise_log_gain.exp(), noise_lpc_coeffs)
+        vocal = self.radiation(
+            self.lpc(glottal_flow, voice_log_gain.exp(), voice_lpc_coeffs)
+            + self.lpc(noise, noise_log_gain.exp(), noise_lpc_coeffs)
+        )
 
-        return self.radiation(vocal)
+        if hasattr(self, "allpass_filter_logits"):
+            biquads = self.logits2biquads(self.allpass_filter_logits)
+            allpass_a = coeff_product(biquads.unsqueeze(1)).squeeze()
+            allpass_b = allpass_a.flip(0)
+            vocal = lfilter(vocal, allpass_a, allpass_b, clamp=False)
+
+        return vocal
 
     def training_step(self, batch, batch_idx):
         x, f0_in_hz = batch
@@ -395,9 +504,29 @@ class MelGlottalVocoder(pl.LightningModule):
         x_hat = self(x, f0_in_hz)
 
         loss = self.criterion(x_hat, x[..., : x_hat.shape[-1]])
+        l1_loss = F.l1_loss(x_hat, x[..., : x_hat.shape[-1]])
+        self.log("train_l1_loss", l1_loss, prog_bar=False, sync_dist=True)
+        loss = loss + l1_loss * self.l1_loss_weight
         # time_loss = torch.mean(mask * (x_hat - x[..., : x_hat.shape[-1]]).abs())
         # loss = loss + time_loss
         # self.print(f"train_loss: {loss.item()}")
         self.log("train_loss", loss, prog_bar=False, sync_dist=True)
         # self.log("train_time_loss", time_loss, prog_bar=True, sync_dist=True)
         return loss
+
+    def validation_step(self, batch, batch_idx):
+        x, f0_in_hz = batch
+
+        x_hat = self(x, f0_in_hz)
+
+        loss = self.criterion(x_hat, x[..., : x_hat.shape[-1]])
+        l1_loss = F.l1_loss(x_hat, x[..., : x_hat.shape[-1]])
+        loss = loss + l1_loss * self.l1_loss_weight
+        return loss, l1_loss
+
+    def validation_epoch_end(self, outputs) -> None:
+        avg_loss = sum(x[0] for x in outputs) / len(outputs)
+        avg_l1_loss = sum(x[1] for x in outputs) / len(outputs)
+
+        self.log("val_loss", avg_loss, prog_bar=True, sync_dist=True)
+        self.log("val_l1_loss", avg_l1_loss, prog_bar=False, sync_dist=True)

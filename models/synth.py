@@ -64,7 +64,7 @@ class GlottalFlowTable(nn.Module):
             raise ValueError(f"unknown normalize_method: {normalize_method}")
 
         if trainable:
-            self.register_parameter("table", table)
+            self.register_parameter("table", nn.Parameter(table))
         else:
             self.register_buffer("table", table)
 

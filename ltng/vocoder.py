@@ -13,6 +13,7 @@ from functools import reduce
 from models.synth import GlottalSynth, GlottalFlowTable
 from models.lpc import LPCSynth, BatchLPCSynth, BatchSecondOrderLPCSynth
 from models.mel import Mel2Control
+from models.tspn import TTSPNEncoder, TopNGenerator
 from models.utils import get_window_fn, get_radiation_time_filter, fir_filt
 
 
@@ -27,14 +28,6 @@ class MelVocoderCLI(LightningCLI):
             "model.hop_length", "model.mel_trsfm.init_args.hop_length"
         )
         parser.link_arguments("model.hop_length", "model.lpc.init_args.hop_length")
-        # parser.link_arguments(
-        #     (
-        #         "model.hop_length",
-        #         "model.table_hop_rate",
-        #     ),
-        #     "model.glottal_synth.init_args.wavetable_hop_length",
-        #     compute_fn=lambda hop_length, table_hop_rate: hop_length * table_hop_rate,
-        # )
 
         parser.link_arguments(
             "model.sample_rate", "model.mel_trsfm.init_args.sample_rate"
@@ -61,36 +54,44 @@ class MelVocoderCLI(LightningCLI):
             + 1
             + enc_channels * 2 ** (len(enc_stride) - 1),
         )
-        # parser.link_arguments(
-        #     "model.coarser_model_hidden_size", "model.table_model.init_args.in_channels"
-        # )
 
         parser.link_arguments(
             (
-                "model.voice_lpc_order",
-                "model.noise_lpc_order",
+                "model.ttspn_key_size",
+                "model.ttspn_value_size",
+            ),
+            "model.voice_ttspn.init_args.d_model",
+            compute_fn=lambda ttspn_key_size, ttspn_value_size: ttspn_key_size
+            + ttspn_value_size,
+        )
+        parser.link_arguments(
+            (
+                "model.ttspn_key_size",
+                "model.ttspn_value_size",
+            ),
+            "model.noise_ttspn.init_args.d_model",
+            compute_fn=lambda ttspn_key_size, ttspn_value_size: ttspn_key_size
+            + ttspn_value_size,
+        )
+
+        parser.link_arguments(
+            (
+                # "model.voice_lpc_order",
+                # "model.noise_lpc_order",
+                "model.ttspn_key_size",
+                "model.voice_allpass_filter_order",
                 # "model.weighted_table",
                 # "model.table_size",
                 "model.coarser_model_hidden_size",
             ),
             "model.mel_model.init_args.out_channels",
-            compute_fn=lambda voice_lpc_order, noise_lpc_order, coarser_model_hidden_size: voice_lpc_order
+            compute_fn=lambda ttspn_key_size, voice_allpass_filter_order, coarser_model_hidden_size: ttspn_key_size
+            * 2
             + 1
-            + noise_lpc_order
             + 1
+            + voice_allpass_filter_order
             + coarser_model_hidden_size,
         )
-
-        # parser.link_arguments(
-        #     (
-        #         "model.weighted_table",
-        #         "model.table_size",
-        #     ),
-        #     "model.table_model.init_args.out_channels",
-        #     compute_fn=lambda weighted_table, table_size: table_size
-        #     if weighted_table
-        #     else 1,
-        # )
 
         parser.set_defaults(
             {
@@ -103,12 +104,24 @@ class MelVocoderCLI(LightningCLI):
                 "model.mel_trsfm": {
                     "class_path": "WrappedMelSpectrogram",
                 },
+                "model.voice_ttspn": {
+                    "class_path": "models.tspn.TTSPNEncoder",
+                    "init_args": {
+                        "out_channels": 2,
+                    },
+                },
+                "model.noise_ttspn": {
+                    "class_path": "models.tspn.TTSPNEncoder",
+                    "init_args": {
+                        "out_channels": 2,
+                    },
+                },
             }
         )
 
 
-def coeff_product(polynomials: Tensor) -> Tensor:
-    n = polynomials.shape[0]
+def coeff_product(polynomials: Union[Tensor, List[Tensor]]) -> Tensor:
+    n = len(polynomials)
     if n == 1:
         return polynomials[0]
 
@@ -222,9 +235,15 @@ class MelGlottalVocoder(pl.LightningModule):
         glottal: GlottalFlowTable,
         lpc: Union[BatchLPCSynth, BatchSecondOrderLPCSynth],
         mel_trsfm: WrappedMelSpectrogram,
+        voice_ttspn: TTSPNEncoder,
+        noise_ttspn: TTSPNEncoder,
         window: str = "hanning",
         voice_lpc_order: int = 16,
         noise_lpc_order: int = 22,
+        voice_allpass_filter_order: int = 6,
+        ttspn_key_size: int = 32,
+        ttspn_value_size: int = 64,
+        ref_set_size: int = 128,
         enc_lpc_order: int = 50,
         enc_channels: int = 32,
         enc_stride: List[int] = [5, 2, 2, 2, 2],
@@ -253,6 +272,8 @@ class MelGlottalVocoder(pl.LightningModule):
         self.glottal = glottal
         self.lpc = lpc
         self.mel_trsfm = mel_trsfm
+        self.voice_ttspn = voice_ttspn
+        self.noise_ttspn = noise_ttspn
 
         self.register_buffer("log_mel_min", torch.tensor(torch.inf))
         self.register_buffer("log_mel_max", torch.tensor(-torch.inf))
@@ -328,12 +349,19 @@ class MelGlottalVocoder(pl.LightningModule):
         self.max_abs_pole = max_abs_pole
         self.l1_loss_weight = l1_loss_weight
         self.split_sizes = [
-            voice_lpc_order,
+            ttspn_key_size,
             1,  # gain
-            noise_lpc_order,  # noise coeffs
+            ttspn_key_size,  # noise coeffs
             1,  # noise gain
             coarser_model_hidden_size,
         ]
+        self.voice_lpc_order = voice_lpc_order
+        self.noise_lpc_order = noise_lpc_order
+        self.voice_allpass_filter_order = voice_allpass_filter_order
+
+        if voice_allpass_filter_order > 0:
+            self.split_sizes.append(voice_allpass_filter_order)
+
         self.coarser_split_sizes = [
             table_size if weighted_table else 1,
             1,  # offset
@@ -341,37 +369,49 @@ class MelGlottalVocoder(pl.LightningModule):
         self.logits2biquads = get_logits2biquads(lpc_coeff_rep, max_abs_pole)
         self.biquads2lpc_coeffs = get_biquads2lpc_coeffs(lpc)
 
-        self.model.dense_out.weight.data.zero_()
-        self.model.dense_out.bias.data.uniform_(-5, 5)
+        # self.model.dense_out.weight.data.zero_()
+        # self.model.dense_out.bias.data.uniform_(-5, 5)
+        self.voice_ttspn.linear.weight.data.zero_()
+        self.noise_ttspn.linear.weight.data.zero_()
         if lpc_coeff_rep == "conj":
-            self.model.dense_out.bias.data[:voice_lpc_order:2] = -10
-            self.model.dense_out.bias.data[
-                voice_lpc_order + 1 : voice_lpc_order + 1 + noise_lpc_order : 2
-            ] = -10
+            # self.model.dense_out.bias.data[:voice_lpc_order:2] = -10
+            # self.model.dense_out.bias.data[
+            #     voice_lpc_order + 1 : voice_lpc_order + 1 + noise_lpc_order : 2
+            # ] = -10
+            self.voice_ttspn.linear.bias.data[0] = -10
+            self.noise_ttspn.linear.bias.data[0] = -10
         elif lpc_coeff_rep == "real" or lpc_coeff_rep == "coef":
-            self.model.dense_out.bias.data[:voice_lpc_order] = 0
-            self.model.dense_out.bias.data[
-                voice_lpc_order + 1 : voice_lpc_order + 1 + noise_lpc_order
-            ] = 0
+            # self.model.dense_out.bias.data[:voice_lpc_order] = 0
+            # self.model.dense_out.bias.data[
+            #     voice_lpc_order + 1 : voice_lpc_order + 1 + noise_lpc_order
+            # ] = 0
+            self.voice_ttspn.linear.bias.data.zero_()
+            self.noise_ttspn.linear.bias.data.zero_()
 
-        self.model.dense_out.bias.data[voice_lpc_order] = 0.0  # gain
+        self.model.dense_out.bias.data[ttspn_key_size] = 0.0  # gain
         self.model.dense_out.bias.data[
-            voice_lpc_order + 1 + noise_lpc_order
+            ttspn_key_size + 1 + ttspn_key_size
         ] = -10.0  # noise gain
 
         self.register_buffer("src_smooth_a", torch.tensor([1, -src_smooth_alpha]))
         self.register_buffer("src_smooth_b", torch.tensor([1.0, 0.0]))
 
         if allpass_filter_order > 0:
-            init = torch.rand(allpass_filter_order // 2, 2) * 6 - 3
-            if lpc_coeff_rep == "conj":
-                init[:, 0] = -10.0
-            elif lpc_coeff_rep == "real" or lpc_coeff_rep == "coef":
-                init[:, 0] = 0.0
+            init = torch.randn(allpass_filter_order // 2, 2)
+            # if lpc_coeff_rep == "conj":
+            #     init[:, 0] = -10.0
+            # elif lpc_coeff_rep == "real" or lpc_coeff_rep == "coef":
+            #     init[:, 0] = 0.0
             self.register_parameter(
                 "allpass_filter_logits",
                 nn.Parameter(init),
             )
+
+        self.topn = TopNGenerator(
+            num_emb=ref_set_size,
+            key_emb_size=ttspn_key_size,
+            value_emb_size=ttspn_value_size,
+        )
 
     def enc_src_and_lpc(self, x):
         with torch.cuda.amp.autocast(enabled=False):
@@ -404,18 +444,61 @@ class MelGlottalVocoder(pl.LightningModule):
         control_params = self.model(mel)
         batch, frames, _ = control_params.shape
         (
-            voice_coeffs_logits,
+            # voice_coeffs_logits,
+            voice_coeff_embed,
             voice_log_gain,
-            noise_coeffs_logits,
+            # noise_coeffs_logits,
+            noise_coeff_embed,
             noise_log_gain,
             coarser_logits,
+            *_,
         ) = control_params.split(self.split_sizes, dim=2)
+
+        voice_init_set = self.topn(
+            voice_coeff_embed.view(-1, voice_coeff_embed.shape[-1]),
+            self.voice_lpc_order,
+        )
+        voice_init_set = voice_init_set.view(batch, frames, self.voice_lpc_order, -1)
+        noise_init_set = self.topn(
+            noise_coeff_embed.view(-1, noise_coeff_embed.shape[-1]),
+            self.noise_lpc_order,
+        )
+        noise_init_set = noise_init_set.view(batch, frames, self.noise_lpc_order, -1)
+
+        voice_init_set = torch.cat(
+            [
+                voice_init_set,
+                voice_coeff_embed.unsqueeze(-2).repeat(1, 1, self.voice_lpc_order, 1),
+            ],
+            dim=-1,
+        )
+        noise_init_set = torch.cat(
+            [
+                noise_init_set,
+                noise_coeff_embed.unsqueeze(-2).repeat(1, 1, self.noise_lpc_order, 1),
+            ],
+            dim=-1,
+        )
+        voice_coeffs_logits = self.voice_ttspn(voice_init_set)
+        noise_coeffs_logits = self.noise_ttspn(noise_init_set)
+
         voice_biquads = self.logits2biquads(
-            voice_coeffs_logits.view(batch, frames, -1, 2)
+            voice_coeffs_logits  # .view(batch, frames, -1, 2)
         )
         noise_biquads = self.logits2biquads(
-            noise_coeffs_logits.view(batch, frames, -1, 2)
+            noise_coeffs_logits  # .view(batch, frames, -1, 2)
         )
+
+        if len(_) > 0:
+            voice_allpass_biquads = self.logits2biquads(_[0].view(batch, frames, -1, 2))
+            return (
+                voice_biquads,
+                voice_log_gain.squeeze(2),
+                noise_biquads,
+                noise_log_gain.squeeze(2),
+                coarser_logits,
+                voice_allpass_biquads,
+            )
 
         return (
             voice_biquads,
@@ -457,10 +540,26 @@ class MelGlottalVocoder(pl.LightningModule):
             noise_biquads,
             noise_log_gain,
             coarser_logits,
+            *_,
         ) = self.get_control_params(feats)
 
         voice_lpc_coeffs = self.biquads2lpc_coeffs(voice_biquads)
         noise_lpc_coeffs = self.biquads2lpc_coeffs(noise_biquads)
+        if len(_) > 0:
+            voice_allpass_biquads = _[0]
+            voice_allpass_lpc_coeffs = self.biquads2lpc_coeffs(voice_allpass_biquads)
+            voice_allpass_a = F.pad(voice_allpass_lpc_coeffs, (1, 0), value=1.0)
+            voice_lpc_coeffs = F.pad(voice_lpc_coeffs, (1, 0), value=1.0)
+            voice_allpass_b = voice_allpass_a.flip(-1)
+
+            voice_lpc_coeffs = coeff_product(
+                [
+                    voice_lpc_coeffs.view(-1, voice_lpc_coeffs.shape[-1]),
+                    voice_allpass_a.view(-1, voice_allpass_a.shape[-1]),
+                ]
+            ).view(*voice_lpc_coeffs.shape[:2], -1)[..., 1:]
+        else:
+            voice_allpass_b = None
 
         table_control_logits, phase_offset_logits = (
             self.coarser_mel_model(coarser_logits.transpose(1, 2))
@@ -487,6 +586,21 @@ class MelGlottalVocoder(pl.LightningModule):
             + self.lpc(noise, noise_log_gain.exp(), noise_lpc_coeffs)
         )
 
+        if voice_allpass_b is not None:
+            fir_weights = (
+                linear_upsample(
+                    voice_allpass_b.transpose(1, 2).reshape(
+                        -1, voice_allpass_b.shape[1]
+                    ),
+                    self.hop_length,
+                )
+                .view(voice_allpass_b.shape[0], voice_allpass_b.shape[2], -1)
+                .transpose(1, 2)
+            )
+            vocal = fir_filt(
+                vocal[:, : fir_weights.shape[1]], fir_weights[:, : vocal.shape[1]]
+            )
+
         if hasattr(self, "allpass_filter_logits"):
             biquads = self.logits2biquads(self.allpass_filter_logits)
             allpass_a = coeff_product(biquads.unsqueeze(1)).squeeze()
@@ -499,15 +613,24 @@ class MelGlottalVocoder(pl.LightningModule):
         x, f0_in_hz = batch
         # x = x[:, 1, :]
 
-        # mask = (f0_in_hz > 20).float()
+        mask = f0_in_hz > 20
+        num_nonzero = mask.count_nonzero()
 
         x_hat = self(x, f0_in_hz)
 
         loss = self.criterion(x_hat, x[..., : x_hat.shape[-1]])
-        l1_loss = F.l1_loss(x_hat, x[..., : x_hat.shape[-1]])
+        # l1_loss = F.l1_loss(x_hat, x[..., : x_hat.shape[-1]])
+
+        l1_loss = (
+            torch.sum(
+                mask.float()[:, : x_hat.shape[1]]
+                * (x_hat - x[..., : x_hat.shape[-1]]).abs()
+            )
+            / num_nonzero
+        )
+
         self.log("train_l1_loss", l1_loss, prog_bar=False, sync_dist=True)
         loss = loss + l1_loss * self.l1_loss_weight
-        # time_loss = torch.mean(mask * (x_hat - x[..., : x_hat.shape[-1]]).abs())
         # loss = loss + time_loss
         # self.print(f"train_loss: {loss.item()}")
         self.log("train_loss", loss, prog_bar=False, sync_dist=True)

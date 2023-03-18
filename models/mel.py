@@ -30,8 +30,8 @@ class Mel2Control(nn.Module):
 
         # out
         self.dense_out = nn.Linear(hidden_channels * 2, out_channels)
-        self.dense_out.weight.data.zero_()
-        self.dense_out.bias.data.zero_()
+        # self.dense_out.weight.data.zero_()
+        # self.dense_out.bias.data.zero_()
 
     def forward(self, mels: Tensor):
         x = self.stack(mels).transpose(1, 2)

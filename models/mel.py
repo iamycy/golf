@@ -3,12 +3,14 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 from torch.nn.utils import weight_norm
 
+from .enc import BackboneModelInterface
 
-class Mel2Control(nn.Module):
+
+class Mel2Control(BackboneModelInterface):
     def __init__(
         self, in_channels: int, out_channels: int, hidden_channels: int = 128, **kwargs
     ):
-        super().__init__()
+        super().__init__(hidden_channels * 2, out_channels)
 
         # conv in stack
         self.stack = nn.Sequential(
@@ -28,14 +30,8 @@ class Mel2Control(nn.Module):
         )
         self.norm = nn.LayerNorm(hidden_channels * 2)
 
-        # out
-        self.dense_out = nn.Linear(hidden_channels * 2, out_channels)
-        # self.dense_out.weight.data.zero_()
-        # self.dense_out.bias.data.zero_()
-
     def forward(self, mels: Tensor):
-        x = self.stack(mels).transpose(1, 2)
+        x = self.stack(mels.transpose(1, 2)).transpose(1, 2)
         x = self.decoder(x)[0]
         x = self.norm(x)
-        y = self.dense_out(x)
-        return y
+        return super().forward(x)

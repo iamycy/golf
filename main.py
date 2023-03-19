@@ -1,11 +1,11 @@
 from pytorch_lightning.strategies import DDPStrategy
 
-from ltng.vocoder import MelVocoderCLI, MelGlottalVocoder
+from ltng.vocoder import DDSPVocoder, DDSPVocoderCLI
 
 
 if __name__ == "__main__":
-    cli = MelVocoderCLI(
-        MelGlottalVocoder,
+    cli = DDSPVocoderCLI(
+        DDSPVocoder,
         # subclass_mode_model=True,
         trainer_defaults={
             "accelerator": "gpu",

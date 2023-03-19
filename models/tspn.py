@@ -22,9 +22,9 @@ class TopNGenerator(nn.Module):
         norm = query.norm(dim=-1).unsqueeze(-1) * self.key_dict.norm(dim=-1)
         cos = prod / F.threshold(norm, 1e-8, 1e-8)
         # get top_n indices
-        _, indices = cos.topk(top_n, dim=-1)
+        weights, indices = cos.topk(top_n, dim=-1)
         # gather values
-        values = self.value_dict[indices]
+        values = self.value_dict[indices] * weights.unsqueeze(-1)
         return values
 
 

@@ -347,15 +347,13 @@ class HarmonicOscillator(OscillatorInterface):
         ) * torch.arange(1, n_harmonic + 1).to(wrapped_phase.device)
         alias_mask = diff >= 0.5
 
-        phase = (
-            torch.cumsum(diff, axis=1) + initial_phase.unsqueeze(1)
-            if initial_phase is not None
-            else 0
+        phase = torch.cumsum(diff, axis=1) + (
+            initial_phase.unsqueeze(1) if initial_phase is not None else 0
         )
 
         if ctx.hop_length > 1:
             amplitudes = linear_upsample(
-                amplitudes.transpose(1, 2), ctx.hop_length
+                amplitudes.transpose(1, 2), ctx
             ).transpose(1, 2)
         valid_length = min(amplitudes.shape[1], phase.shape[1])
         amplitudes = amplitudes[:, :valid_length]

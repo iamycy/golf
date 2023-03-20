@@ -78,6 +78,7 @@ class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
         table_weight_hidden_size: int,
         *args,
         max_abs_value: float = 0.99,
+        use_snr: bool = False,
         kwargs: dict = {},
     ):
         assert voice_lpc_order % 2 == 0
@@ -93,6 +94,7 @@ class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
             *args,
             **kwargs,
         )
+        self.use_snr = use_snr
         self.logits2biquads = get_logits2biquads("conj", max_abs_value)
         self.backbone.out_linear.weight.data.zero_()
         self.backbone.out_linear.bias.data[
@@ -123,6 +125,10 @@ class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
         voice_lpc_coeffs = biquads2lpc(voice_biquads)
         noise_lpc_coeffs = biquads2lpc(noise_biquads)
 
+        if self.use_snr:
+            log_snr = noise_log_gain
+            noise_log_gain = voice_log_gain - log_snr
+
         voice_gain = voice_log_gain.squeeze(-1).exp()
         noise_gain = noise_log_gain.squeeze(-1).exp()
 
@@ -150,3 +156,33 @@ class GlottalRealCoeffLPCEncoder(GlottalComplexConjLPCEncoder):
         self.backbone.out_linear.bias.data[
             1 + voice_lpc_order + 1 : 1 + voice_lpc_order + 1 + noise_lpc_order :
         ] = 0
+
+
+class SawSing(VocoderParameterEncoderInterface):
+    def __init__(
+        self,
+        voice_n_mag: int,
+        noise_n_mag: int,
+        *args,
+        kwargs: dict = {},
+    ):
+        super().__init__(
+            extra_split_size=[voice_n_mag, noise_n_mag],
+            *args,
+            **kwargs,
+        )
+
+    def forward(
+        self, h: Tensor
+    ) -> Tuple[
+        Tensor, Tuple[Any, ...], Tuple[Any, ...], Tuple[Any, ...], Tuple[Any, ...]
+    ]:
+        (f0, voice_log_mag, noise_log_mag) = super().forward(h)
+
+        return (
+            f0,
+            (),
+            (voice_log_mag,),
+            (noise_log_mag,),
+            (),
+        )

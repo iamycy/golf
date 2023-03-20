@@ -2,6 +2,7 @@ import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
 from torchaudio.functional import lfilter
+from torch_fftconv.functional import fft_conv1d
 from typing import Optional, Union, List, Tuple, Callable, Any
 
 
@@ -13,6 +14,9 @@ from .utils import (
     complex2biquads,
     params2biquads,
     TimeContext,
+    hilbert,
+    linear_upsample,
+    fir_filt,
 )
 
 
@@ -22,6 +26,10 @@ __all__ = [
     "LTIRadiationFilter",
     "LTIComplexConjAllpassFilter",
     "LTIRealCoeffAllpassFilter",
+    "LTVMinimumPhaseFIRFilterPrecise",
+    "LTVMinimumPhaseFIRFilter",
+    "LTVZeroPhaseFIRFilterPrecise",
+    "LTVZeroPhaseFIRFilter",
 ]
 
 
@@ -95,6 +103,189 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
 
         # normalize
         return y / norm
+
+
+class LTVMinimumPhaseFIRFilterPrecise(LTVFilterInterface):
+    def __init__(self, window: str):
+        super().__init__()
+        self.window_fn = get_window_fn(window)
+
+    @staticmethod
+    def get_minimum_phase_fir(log_mag: Tensor):
+        # first, get symmetric log-magnitude
+        # always assume n_fft is even
+        log_mag = torch.cat([log_mag, log_mag.flip(-1)[..., 1:-1]], dim=-1)
+        # get minimum-phase impulse response
+        min_phase = -hilbert(log_mag, dim=-1).imag
+        # get minimum-phase FIR filter
+        frequency_response = torch.exp(log_mag + 1j * min_phase)
+        # get time-domain filter
+        kernel = torch.fft.ifft(frequency_response, dim=-1).real
+        return kernel
+
+    def windowing(self, kernel: Tensor):
+        window = self.window_fn(
+            kernel.shape[-1], device=kernel.device, dtype=kernel.dtype
+        )
+        window[: kernel.shape[-1] // 2] = 1
+        return kernel * window
+
+    def forward(self, ex: Tensor, log_mag: Tensor, ctx: TimeContext, **kwargs):
+        """
+        Args:
+            ex (Tensor): [B, T]
+            log_mag (Tensor): [B, T / hop_length, n_fft // 2 + 1]
+            ctx (TimeContext): TimeContext
+        """
+        assert ex.ndim == 2
+        assert log_mag.ndim == 3
+
+        kernel = self.get_minimum_phase_fir(log_mag)
+        kernel = self.windowing(kernel)
+
+        upsampled_kernel = linear_upsample(
+            kernel.transpose(1, 2).contiguous(), ctx
+        ).transpose(1, 2)
+
+        ex = ex[:, : upsampled_kernel.shape[1]]
+        upsampled_kernel = upsampled_kernel[:, : ex.shape[1]]
+        return fir_filt(ex, upsampled_kernel)
+
+
+class LTVMinimumPhaseFIRFilter(LTVMinimumPhaseFIRFilterPrecise):
+    def __init__(self, window: str, conv_method: str = "direct"):
+        super().__init__(window=window)
+        if conv_method == "direct":
+            self.convolve_fn = F.conv1d
+        elif conv_method == "fft":
+            self.convolve_fn = fft_conv1d
+        else:
+            raise ValueError(f"Unknown conv_method: {conv_method}")
+
+    def forward(self, ex: Tensor, log_mag: Tensor, ctx: TimeContext, **kwargs):
+        """
+        Args:
+            ex (Tensor): [B, T]
+            log_mag (Tensor): [B, T / hop_length, n_fft // 2 + 1]
+            ctx (TimeContext): TimeContext
+        """
+        assert ex.ndim == 2
+        assert log_mag.ndim == 3
+
+        hop_length = ctx.hop_length
+
+        kernel = self.get_minimum_phase_fir(log_mag)
+        kernel = self.windowing(kernel)
+
+        # convolve
+        unfolded = F.pad(ex, (kernel.shape[-1] - 1, 0), "constant", 0).unfold(
+            1, kernel.shape[-1] + hop_length - 1, hop_length
+        )
+        assert (
+            unfolded.shape[1] <= kernel.shape[1]
+        ), f"{unfolded.shape} != {kernel.shape}"
+        kernel = kernel[:, : unfolded.shape[1]]
+
+        convolved = self.convolve_fn(
+            unfolded.reshape(1, -1, unfolded.shape[-1]),
+            kernel.reshape(-1, 1, kernel.shape[-1]).flip(-1),
+            groups=kernel.shape[0] * kernel.shape[1],
+        ).view(kernel.shape[0], -1)
+        return convolved
+
+
+class LTVZeroPhaseFIRFilterPrecise(LTVFilterInterface):
+    def __init__(self, window: str):
+        super().__init__()
+        self.window_fn = get_window_fn(window)
+
+    @staticmethod
+    def get_zero_phase_fir(log_mag: Tensor):
+        mag = torch.exp(log_mag) + 0j
+        # get zero-phase impulse response
+        fir = torch.fft.irfft(mag, dim=-1)
+        fir = torch.fft.fftshift(fir, dim=-1)
+        return fir
+
+    def windowing(self, kernel: Tensor):
+        window = self.window_fn(
+            kernel.shape[-1], device=kernel.device, dtype=kernel.dtype
+        )
+        return kernel * window
+
+    def forward(self, ex: Tensor, log_mag: Tensor, ctx: TimeContext, **kwargs):
+        """
+        Args:
+            ex (Tensor): [B, T]
+            log_mag (Tensor): [B, T / hop_length, n_fft // 2 + 1]
+            ctx (TimeContext): TimeContext
+        """
+        assert ex.ndim == 2
+        assert log_mag.ndim == 3
+
+        kernel = self.get_zero_phase_fir(log_mag)
+        kernel = self.windowing(kernel)
+
+        upsampled_kernel = linear_upsample(
+            kernel.transpose(1, 2).contiguous(), ctx
+        ).transpose(1, 2)
+
+        ex = ex[:, : upsampled_kernel.shape[1]]
+        upsampled_kernel = upsampled_kernel[:, : ex.shape[1]]
+
+        padding_left = (kernel.shape[-1] - 1) // 2
+        padding_right = kernel.shape[-1] - 1 - padding_left
+
+        x = F.pad(x, (padding_left, padding_right), "constant", 0).unfold(
+            -1, kernel.shape[-1], 1
+        )
+        return (
+            torch.matmul(x.unsqueeze(-2), kernel.unsqueeze(-1)).squeeze(-1).squeeze(-1)
+        )
+
+
+class LTVZeroPhaseFIRFilter(LTVZeroPhaseFIRFilterPrecise):
+    def __init__(self, window: str, conv_method: str = "direct"):
+        super().__init__(window=window)
+        if conv_method == "direct":
+            self.convolve_fn = F.conv1d
+        elif conv_method == "fft":
+            self.convolve_fn = fft_conv1d
+        else:
+            raise ValueError(f"Unknown conv_method: {conv_method}")
+
+    def forward(self, ex: Tensor, log_mag: Tensor, ctx: TimeContext, **kwargs):
+        """
+        Args:
+            ex (Tensor): [B, T]
+            log_mag (Tensor): [B, T / hop_length, n_fft // 2 + 1]
+            ctx (TimeContext): TimeContext
+        """
+        assert ex.ndim == 2
+        assert log_mag.ndim == 3
+
+        hop_length = ctx.hop_length
+
+        kernel = self.get_zero_phase_fir(log_mag)
+        kernel = self.windowing(kernel)
+
+        padding = (kernel.shape[-1] - 1) // 2
+
+        # convolve
+        unfolded = F.pad(ex, (padding, padding), "constant", 0).unfold(
+            1, kernel.shape[-1] + hop_length - 1, hop_length
+        )
+        assert (
+            unfolded.shape[1] <= kernel.shape[1]
+        ), f"{unfolded.shape} != {kernel.shape}"
+        kernel = kernel[:, : unfolded.shape[1]]
+
+        convolved = self.convolve_fn(
+            unfolded.reshape(1, -1, unfolded.shape[-1]),
+            kernel.reshape(-1, 1, kernel.shape[-1]),
+            groups=kernel.shape[0] * kernel.shape[1],
+        ).view(kernel.shape[0], -1)
+        return convolved
 
 
 class LTIRadiationFilter(FilterInterface):

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import math
 from typing import Optional, Union, List, Tuple, Callable
 
-from .utils import get_transformed_lf, TimeContext, linear_upsample
+from .utils import get_transformed_lf, TimeContext, linear_upsample, smooth_phase_offset
 
 
 __all__ = [
@@ -17,9 +17,9 @@ __all__ = [
 
 
 def check_input_hook(m, args):
-    wrapped_phase, *args = args
-    assert wrapped_phase.ndim == 2, wrapped_phase.shape
-    assert torch.all(wrapped_phase >= 0) and torch.all(wrapped_phase <= 1)
+    upsampled_phase, *args = args
+    assert upsampled_phase.ndim == 2, upsampled_phase.shape
+    assert torch.all(upsampled_phase >= 0) and torch.all(upsampled_phase <= 0.5)
 
 
 def check_weight_hook(m, args):
@@ -34,7 +34,7 @@ class OscillatorInterface(nn.Module):
 
     def forward(
         self,
-        wrapped_phase: Tensor,
+        upsampled_phase: Tensor,
         *args,
         **kwargs,
     ) -> Tensor:
@@ -190,11 +190,11 @@ class GlottalFlowTable(OscillatorInterface):
         return final_flow
 
     def forward(
-        self, wrapped_phase: Tensor, table_select_weight: Tensor, ctx: TimeContext
+        self, upsampled_phase: Tensor, table_select_weight: Tensor, ctx: TimeContext
     ) -> Tensor:
         """
         input:
-            wrapped_phase: (batch, seq_len)
+            upsampled_phase: (batch, seq_len)
             table_select_weight: (batch, seq_len / hop_length, ...)
             ctx: TimeContext
         """
@@ -204,7 +204,7 @@ class GlottalFlowTable(OscillatorInterface):
 
 class IndexedGlottalFlowTable(GlottalFlowTable):
     def forward(
-        self, wrapped_phase: Tensor, table_select_weight: Tensor, ctx: TimeContext
+        self, upsampled_phase: Tensor, table_select_weight: Tensor, ctx: TimeContext
     ) -> Tensor:
         assert table_select_weight.dim() == 2
         assert torch.all(table_select_weight >= 0) and torch.all(
@@ -225,12 +225,13 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
             )
             * p
         )
+        wrapped_phase = upsampled_phase.cumsum(1) % 1
         return self.generate(wrapped_phase, interp_tables, ctx)
 
 
 class WeightedGlottalFlowTable(GlottalFlowTable):
     def forward(
-        self, wrapped_phase: Tensor, table_select_weight: Tensor, ctx: TimeContext
+        self, upsampled_phase: Tensor, table_select_weight: Tensor, ctx: TimeContext
     ) -> Tensor:
         assert table_select_weight.dim() == 3
         assert table_select_weight.shape[2] == self.table.shape[0]
@@ -238,6 +239,7 @@ class WeightedGlottalFlowTable(GlottalFlowTable):
             table_select_weight <= 1
         )
         weighted_tables = table_select_weight @ self.table
+        wrapped_phase = upsampled_phase.cumsum(1) % 1
         return self.generate(wrapped_phase, weighted_tables, ctx)
 
 
@@ -278,17 +280,17 @@ class DownsampledIndexedGlottalFlowTable(IndexedGlottalFlowTable):
 
     def forward(
         self,
-        wrapped_phase: Tensor,
+        upsampled_phase: Tensor,
         h: Tensor,
         ctx: TimeContext,
     ) -> Tensor:
         """
         input:
-            wrapped_phase: (batch, seq_len)
+            upsampled_phase: (batch, seq_len)
             h: (batch, frames, in_channels)
         """
         table_control = self.model(h.transpose(1, 2)).squeeze(1).sigmoid()
-        return super().forward(wrapped_phase, table_control, ctx(self.hop_rate))
+        return super().forward(upsampled_phase, table_control, ctx(self.hop_rate))
 
 
 class DownsampledWeightedGlottalFlowTable(WeightedGlottalFlowTable):
@@ -307,17 +309,17 @@ class DownsampledWeightedGlottalFlowTable(WeightedGlottalFlowTable):
 
     def forward(
         self,
-        wrapped_phase: Tensor,
+        upsampled_phase: Tensor,
         h: Tensor,
         ctx: TimeContext,
     ) -> Tensor:
         """
         input:
-            wrapped_phase: (batch, seq_len)
+            upsampled_phase: (batch, seq_len)
             h: (batch, frames, in_channels)
         """
         table_control = self.model(h.transpose(1, 2)).softmax(dim=1).transpose(1, 2)
-        return super().forward(wrapped_phase, table_control, ctx(self.hop_rate))
+        return super().forward(upsampled_phase, table_control, ctx(self.hop_rate))
 
 
 class HarmonicOscillator(OscillatorInterface):
@@ -325,7 +327,7 @@ class HarmonicOscillator(OscillatorInterface):
 
     def forward(
         self,
-        wrapped_phase: Tensor,
+        upsampled_phase: Tensor,
         amplitudes: Tensor,
         ctx: TimeContext,
         initial_phase: Optional[Tensor] = None,
@@ -341,20 +343,19 @@ class HarmonicOscillator(OscillatorInterface):
 
         # harmonic synth
         n_harmonic = amplitudes.shape[-1]
-        diff = wrapped_phase[:, 1:] - wrapped_phase[:, :-1]
-        diff = torch.cat([wrapped_phase[:, :1], diff], dim=1).unsqueeze(
-            -1
-        ) * torch.arange(1, n_harmonic + 1).to(wrapped_phase.device)
-        alias_mask = diff >= 0.5
+        harmonics = upsampled_phase.unsqueeze(-1) * torch.arange(1, n_harmonic + 1).to(
+            upsampled_phase.device
+        )
+        alias_mask = harmonics >= 0.5
 
-        phase = torch.cumsum(diff, axis=1) + (
+        phase = torch.cumsum(harmonics, axis=1) + (
             initial_phase.unsqueeze(1) if initial_phase is not None else 0
         )
 
         if ctx.hop_length > 1:
-            amplitudes = linear_upsample(
-                amplitudes.transpose(1, 2), ctx
-            ).transpose(1, 2)
+            amplitudes = linear_upsample(amplitudes.transpose(1, 2), ctx).transpose(
+                1, 2
+            )
         valid_length = min(amplitudes.shape[1], phase.shape[1])
         amplitudes = amplitudes[:, :valid_length]
         phase = phase[:, :valid_length]
@@ -364,7 +365,11 @@ class HarmonicOscillator(OscillatorInterface):
         amplitudes = torch.where(alias_mask, 0, amplitudes)
 
         # signal
-        return torch.sum(torch.sin(phase) * amplitudes, -1)
+        return (
+            (torch.sin(phase * 2 * torch.pi)[..., None, :] @ amplitudes[..., None])
+            .squeeze(-1)
+            .squeeze(-1)
+        )
 
 
 class SawToothOscillator(HarmonicOscillator):
@@ -377,11 +382,20 @@ class SawToothOscillator(HarmonicOscillator):
 
     def forward(
         self,
-        wrapped_phase: Tensor,
+        upsampled_phase: Tensor,
         initial_phase: Optional[Tensor] = None,
         **kwargs,
     ) -> Tensor:
 
-        amplitudes = self.amplicudes[None, None, :].repeat(*wrapped_phase.shape, 1)
+        amplitudes = self.amplicudes[None, None, :].repeat(*upsampled_phase.shape, 1)
         ctx = TimeContext(1)
-        return super().forward(wrapped_phase, amplitudes, ctx, initial_phase)
+        return super().forward(upsampled_phase, amplitudes, ctx, initial_phase)
+
+
+class PulseTrain(OscillatorInterface):
+    def forward(self, upsampled_phase: Tensor) -> Tensor:
+        # Make mask represents voiced region.
+        unupsampled_phase = torch.cumsum(upsampled_phase, dim=1)
+        phase_transition = (upsampled_phase[:, 1:] - upsampled_phase[:, :-1]) > 0
+        out = torch.zeros_like(upsampled_phase)
+        out[:, 1:][phase_transition] = 1

@@ -39,12 +39,12 @@ class HarmonicPlusNoiseSynth(nn.Module):
     ) -> Tensor:
         """
         Args:
-            wrapped_phase: (batch_size, samples)
+            phase: (batch_size, samples)
         """
         assert torch.all(phase >= 0) and torch.all(phase <= 0.5)
-        wrapped_phase = linear_upsample(phase, ctx).cumsum(-1) % 1
+        upsampled_phase = linear_upsample(phase, ctx)
         # Time-varying components
-        harm_osc = self.harm_oscillator(wrapped_phase, *harm_osc_params, ctx=ctx)
+        harm_osc = self.harm_oscillator(upsampled_phase, *harm_osc_params, ctx=ctx)
         noise = self.noise_generator(harm_osc, *noise_params, ctx=ctx)
         if self.harm_filter is not None:
             harm_osc = self.harm_filter(harm_osc, *harm_filt_params, ctx=ctx)

@@ -236,11 +236,11 @@ class LTVZeroPhaseFIRFilterPrecise(LTVFilterInterface):
         padding_left = (kernel.shape[-1] - 1) // 2
         padding_right = kernel.shape[-1] - 1 - padding_left
 
-        x = F.pad(x, (padding_left, padding_right), "constant", 0).unfold(
+        ex = F.pad(ex, (padding_left, padding_right), "constant", 0).unfold(
             -1, kernel.shape[-1], 1
         )
         return (
-            torch.matmul(x.unsqueeze(-2), kernel.unsqueeze(-1)).squeeze(-1).squeeze(-1)
+            torch.matmul(ex.unsqueeze(-2), upsampled_kernel.unsqueeze(-1)).squeeze(-1).squeeze(-1)
         )
 
 

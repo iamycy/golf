@@ -104,7 +104,14 @@ class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
         self.backbone.out_linear.bias.data[
             1 + voice_lpc_order + 1 : 1 + voice_lpc_order + 1 + noise_lpc_order : 2
         ] = -10  # initialize magnitude close to zero
-        self.backbone.out_linear.bias.data[2 + voice_lpc_order + noise_lpc_order] = -10
+        if use_snr:
+            self.backbone.out_linear.bias.data[
+                1 + voice_lpc_order + 1 + noise_lpc_order
+            ] = 20
+        else:
+            self.backbone.out_linear.bias.data[
+                2 + voice_lpc_order + noise_lpc_order
+            ] = -10
 
     def forward(
         self, h: Tensor
@@ -127,7 +134,7 @@ class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
 
         if self.use_snr:
             log_snr = noise_log_gain
-            noise_log_gain = voice_log_gain - log_snr
+            noise_log_gain = voice_log_gain - log_snr * 0.5
 
         voice_gain = voice_log_gain.squeeze(-1).exp()
         noise_gain = noise_log_gain.squeeze(-1).exp()

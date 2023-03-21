@@ -209,3 +209,23 @@ def smooth_phase_offset(phase_offset: Tensor) -> Tensor:
         ),
         dim=1,
     )
+
+
+def hilbert(x: Tensor, dim: int = -1) -> Tensor:
+    assert not x.is_complex()
+    N = x.shape[dim]
+    Xf = torch.fft.fft(x, dim=dim)
+    h = x.new_zeros(N)
+    if N % 2 == 0:
+        h[0] = h[N // 2] = 1
+        h[1 : N // 2] = 2
+    else:
+        h[0] = 1
+        h[1 : (N + 1) // 2] = 2
+
+    if x.ndim > 1:
+        ind = [None] * x.ndim
+        ind[dim] = slice(None)
+        h = h[tuple(ind)]
+    x = torch.fft.ifft(Xf * h, dim=dim)
+    return x

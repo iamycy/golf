@@ -6,6 +6,7 @@ from typing import Optional, Union, List, Tuple, Callable
 __all__ = [
     "NoiseInterface",
     "StandardNormalNoise",
+    "UniformNoise",
 ]
 
 
@@ -26,3 +27,11 @@ class StandardNormalNoise(NoiseInterface):
 
     def forward(self, ref: Tensor, *args, **kwargs) -> Tensor:
         return torch.randn_like(ref)
+
+
+class UniformNoise(NoiseInterface):
+    def __init__(self):
+        super().__init__(torch.distributions.Uniform(-1, 1))
+
+    def forward(self, ref: Tensor, *args, **kwargs) -> Tensor:
+        return torch.rand_like(ref) * 2 - 1

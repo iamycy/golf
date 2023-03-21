@@ -143,10 +143,14 @@ class DDSPVocoder(pl.LightningModule):
         low_res_mask = low_res_mask[:, :minimum_length]
         f0_hat = f0_hat[:, :minimum_length]
 
+        f0_for_decoder = f0_hat.detach() if self.detach_f0 else f0_hat
+
         if self.train_with_true_f0:
-            phase = torch.where(low_res_mask, low_res_f0, f0_hat) / self.sample_rate
+            phase = (
+                torch.where(low_res_mask, low_res_f0, f0_for_decoder) / self.sample_rate
+            )
         else:
-            phase = (f0_hat.detach() if self.detach_f0 else f0_hat) / self.sample_rate
+            phase = f0_for_decoder / self.sample_rate
 
         ctx = TimeContext(self.hop_length)
         x_hat = self.decoder(

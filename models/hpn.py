@@ -30,7 +30,7 @@ class HarmonicPlusNoiseSynth(nn.Module):
 
     def forward(
         self,
-        phase: Tensor,
+        phase_params: Tuple[Tensor, Optional[Tensor]],
         harm_osc_params: Tuple[Tensor, ...],
         harm_filt_params: Tuple[Tensor, ...],
         noise_filt_params: Tuple[Tensor, ...],
@@ -41,8 +41,15 @@ class HarmonicPlusNoiseSynth(nn.Module):
         Args:
             phase: (batch_size, samples)
         """
+        phase, *_ = phase_params
         assert torch.all(phase >= 0) and torch.all(phase <= 0.5)
         upsampled_phase = linear_upsample(phase, ctx)
+        if len(_):
+            voicing = _[0]
+            assert torch.all(voicing >= 0) and torch.all(voicing <= 1)
+            upsampled_voicing = linear_upsample(voicing, ctx)
+            upsampled_phase = upsampled_phase * upsampled_voicing
+
         # Time-varying components
         harm_osc = self.harm_oscillator(upsampled_phase, *harm_osc_params, ctx=ctx)
         noise = self.noise_generator(harm_osc, *noise_params, ctx=ctx)

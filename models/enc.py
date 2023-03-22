@@ -28,14 +28,17 @@ class VocoderParameterEncoderInterface(nn.Module):
 
     def __init__(
         self,
-        extra_split_size: List[int],
         backbone_type: str,
+        learn_voicing: bool = False,
         f0_min: float = 80,
         f0_max: float = 1000,
+        extra_split_sizes: List[int] = [],
         **kwargs,
     ):
         super().__init__()
-        self.split_size = [1] + extra_split_size
+        extra_split_sizes = ([1, 1] if learn_voicing else [1]) + extra_split_sizes
+        self.split_size = extra_split_sizes
+        self.learn_voicing = learn_voicing
         self.log_f0_min = math.log(f0_min)
         self.log_f0_max = math.log(f0_max)
 
@@ -54,7 +57,11 @@ class VocoderParameterEncoderInterface(nn.Module):
     def forward(
         self, h: Tensor
     ) -> Tuple[
-        Tensor, Tuple[Any, ...], Tuple[Any, ...], Tuple[Any, ...], Tuple[Any, ...]
+        Tuple[Tensor, Optional[Tensor]],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
     ]:
         """
         Args:
@@ -67,6 +74,8 @@ class VocoderParameterEncoderInterface(nn.Module):
         """
         f0_logits, *_ = self.backbone(h).split(self.split_size, dim=-1)
         f0 = self.logits2f0(f0_logits).squeeze(-1)
+        if self.learn_voicing:
+            _ = (_[0].squeeze(-1), *_[1:])
         return (f0,) + tuple(_)
 
 
@@ -79,48 +88,68 @@ class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
         *args,
         max_abs_value: float = 0.99,
         use_snr: bool = False,
+        extra_split_sizes: List[int] = [],
         kwargs: dict = {},
     ):
         assert voice_lpc_order % 2 == 0
         assert noise_lpc_order % 2 == 0
-        super().__init__(
-            extra_split_size=[
+
+        extra_split_sizes.extend(
+            [
                 voice_lpc_order,
                 1,
                 noise_lpc_order,
                 1,
                 table_weight_hidden_size,
-            ],
+            ]
+        )
+        super().__init__(
             *args,
+            extra_split_sizes=extra_split_sizes,
             **kwargs,
         )
         self.use_snr = use_snr
         self.logits2biquads = get_logits2biquads("conj", max_abs_value)
         self.backbone.out_linear.weight.data.zero_()
+
+        offset = 1 if self.learn_voicing else 0
         self.backbone.out_linear.bias.data[
-            1 : 1 + voice_lpc_order : 2
+            offset + 1 : offset + 1 + voice_lpc_order : 2
         ] = -10  # initialize magnitude close to zero
-        self.backbone.out_linear.bias.data[1 + voice_lpc_order] = 0  # initialize gain
         self.backbone.out_linear.bias.data[
-            1 + voice_lpc_order + 1 : 1 + voice_lpc_order + 1 + noise_lpc_order : 2
+            offset + 1 + voice_lpc_order
+        ] = 0  # initialize gain
+        self.backbone.out_linear.bias.data[
+            offset
+            + 1
+            + voice_lpc_order
+            + 1 : offset
+            + 1
+            + voice_lpc_order
+            + 1
+            + noise_lpc_order : 2
         ] = -10  # initialize magnitude close to zero
         if use_snr:
             self.backbone.out_linear.bias.data[
-                1 + voice_lpc_order + 1 + noise_lpc_order
+                offset + 1 + voice_lpc_order + 1 + noise_lpc_order
             ] = 20
         else:
             self.backbone.out_linear.bias.data[
-                2 + voice_lpc_order + noise_lpc_order
+                offset + 2 + voice_lpc_order + noise_lpc_order
             ] = -10
 
     def forward(
         self, h: Tensor
     ) -> Tuple[
-        Tensor, Tuple[Any, ...], Tuple[Any, ...], Tuple[Any, ...], Tuple[Any, ...]
+        Tuple[Tensor, Optional[Tensor]],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
     ]:
         batch, frames, _ = h.shape
         (
-            f0,
+            *f0_params,
             voice_lpc_logits,
             voice_log_gain,
             noise_lpc_logits,
@@ -140,7 +169,7 @@ class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
         noise_gain = noise_log_gain.squeeze(-1).exp()
 
         return (
-            f0,
+            f0_params,
             (h,),
             (voice_gain, voice_lpc_coeffs),
             (noise_gain, noise_lpc_coeffs),
@@ -157,11 +186,27 @@ class GlottalRealCoeffLPCEncoder(GlottalComplexConjLPCEncoder):
         max_abs_value: float = 0.99,
         **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            voice_lpc_order,
+            noise_lpc_order,
+            *args,
+            max_abs_value=max_abs_value,
+            **kwargs,
+        )
         self.logits2biquads = get_logits2biquads("coef", max_abs_value)
-        self.backbone.out_linear.bias.data[1 : 1 + voice_lpc_order :] = 0
+        offset = 1 if self.learn_voicing else 0
         self.backbone.out_linear.bias.data[
-            1 + voice_lpc_order + 1 : 1 + voice_lpc_order + 1 + noise_lpc_order :
+            offset + 1 : offset + 1 + voice_lpc_order :
+        ] = 0
+        self.backbone.out_linear.bias.data[
+            offset
+            + 1
+            + voice_lpc_order
+            + 1 : offset
+            + 1
+            + voice_lpc_order
+            + 1
+            + noise_lpc_order :
         ] = 0
 
 
@@ -171,23 +216,28 @@ class SawSing(VocoderParameterEncoderInterface):
         voice_n_mag: int,
         noise_n_mag: int,
         *args,
+        extra_split_sizes: List[int] = [],
         kwargs: dict = {},
     ):
         super().__init__(
-            extra_split_size=[voice_n_mag, noise_n_mag],
             *args,
+            extra_split_sizes=extra_split_sizes + [voice_n_mag, noise_n_mag],
             **kwargs,
         )
 
     def forward(
         self, h: Tensor
     ) -> Tuple[
-        Tensor, Tuple[Any, ...], Tuple[Any, ...], Tuple[Any, ...], Tuple[Any, ...]
+        Tuple[Tensor, Optional[Tensor]],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
     ]:
-        (f0, voice_log_mag, noise_log_mag) = super().forward(h)
+        *f0_params, voice_log_mag, noise_log_mag = super().forward(h)
 
         return (
-            f0,
+            f0_params,
             (),
             (voice_log_mag,),
             (noise_log_mag,),

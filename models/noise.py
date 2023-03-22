@@ -35,3 +35,15 @@ class UniformNoise(NoiseInterface):
 
     def forward(self, ref: Tensor, *args, **kwargs) -> Tensor:
         return torch.rand_like(ref) * 2 - 1
+
+
+class SignFLipNoise(NoiseInterface):
+    def __init__(self):
+        super().__init__(torch.distributions.Uniform(-1, 1))
+
+    def forward(self, ref: Tensor, *args, **kwargs) -> Tensor:
+        sign = ref.new_empty(ref.shape[:-1]).uniform_(-1, 1).sign()
+        tmp = torch.ones_like(ref)
+        tmp[..., ::2] = sign.unsqueeze(-1)
+        tmp[..., 1::2] = -sign.unsqueeze(-1)
+        return tmp

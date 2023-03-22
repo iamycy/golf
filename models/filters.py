@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torchaudio.functional import lfilter
 from torch_fftconv.functional import fft_conv1d
 from typing import Optional, Union, List, Tuple, Callable, Any
+from diffsptk import MLSA
 
 
 from .lpc import lpc_synthesis
@@ -143,8 +144,14 @@ class LTVMinimumPhaseFIRFilterPrecise(LTVFilterInterface):
         kernel = self.get_minimum_phase_fir(log_mag)
         kernel = self.windowing(kernel)
 
-        upsampled_kernel = linear_upsample(
-            kernel.transpose(1, 2).contiguous(), ctx
+        # upsampled_kernel = linear_upsample(
+        #     kernel.transpose(1, 2).contiguous(), ctx
+        # ).transpose(1, 2)
+        upsampled_kernel = F.upsample(
+            kernel.transpose(1, 2),
+            scale_factor=ctx.hop_length,
+            mode="linear",
+            align_corners=False,
         ).transpose(1, 2)
 
         ex = ex[:, : upsampled_kernel.shape[1]]
@@ -226,8 +233,14 @@ class LTVZeroPhaseFIRFilterPrecise(LTVFilterInterface):
         kernel = self.get_zero_phase_fir(log_mag)
         kernel = self.windowing(kernel)
 
-        upsampled_kernel = linear_upsample(
-            kernel.transpose(1, 2).contiguous(), ctx
+        # upsampled_kernel = linear_upsample(
+        #     kernel.transpose(1, 2).contiguous(), ctx
+        # ).transpose(1, 2)
+        upsampled_kernel = F.upsample(
+            kernel.transpose(1, 2),
+            scale_factor=ctx.hop_length,
+            mode="linear",
+            align_corners=False,
         ).transpose(1, 2)
 
         ex = ex[:, : upsampled_kernel.shape[1]]
@@ -240,7 +253,9 @@ class LTVZeroPhaseFIRFilterPrecise(LTVFilterInterface):
             -1, kernel.shape[-1], 1
         )
         return (
-            torch.matmul(ex.unsqueeze(-2), upsampled_kernel.unsqueeze(-1)).squeeze(-1).squeeze(-1)
+            torch.matmul(ex.unsqueeze(-2), upsampled_kernel.unsqueeze(-1))
+            .squeeze(-1)
+            .squeeze(-1)
         )
 
 
@@ -356,3 +371,17 @@ class LTIRealCoeffAllpassFilter(LTIComplexConjAllpassFilter):
         a_coeffs = coeff_product(biquads.unsqueeze(1)).squeeze()
         b_coeffs = a_coeffs.flip(0)
         return lfilter(ex, a_coeffs, b_coeffs, False)
+
+
+class LTVMLSAFilter(LTVFilterInterface):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__()
+
+        self.mlsa = MLSA(
+            *args,
+            cascade=True,
+            **kwargs,
+        )
+
+    def forward(self, ex: Tensor, mc: Tensor, ctx: TimeContext, **kwargs):
+        return self.mlsa(ex, mc)

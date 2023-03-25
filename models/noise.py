@@ -37,7 +37,7 @@ class UniformNoise(NoiseInterface):
         return torch.rand_like(ref) * 2 - 1
 
 
-class SignFLipNoise(NoiseInterface):
+class SignFlipNoise(NoiseInterface):
     def __init__(self):
         super().__init__(torch.distributions.Uniform(-1, 1))
 

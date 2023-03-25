@@ -74,6 +74,15 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
         assert window_size >= hop_length * 2, f"{window_size} < {hop_length * 2}"
         padding = (window_size - hop_length) // 2
 
+        # interpolate gain
+        upsampled_gain = F.interpolate(
+            gain.unsqueeze(1),
+            scale_factor=hop_length,
+            mode="linear",
+            align_corners=False,
+        ).squeeze(1)
+        ex = ex[:, : upsampled_gain.shape[1]] * upsampled_gain[:, : ex.shape[1]]
+
         ex = F.pad(
             ex,
             (padding,) * 2,
@@ -89,7 +98,9 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
         unfolded = unfolded.reshape(-1, window_size)
         gain = gain.reshape(-1)
         a = a.reshape(-1, a.shape[-1])
-        filtered = lpc_synthesis(unfolded, gain, a).view(batch, frames, -1)
+        filtered = lpc_synthesis(unfolded, torch.ones_like(gain), a).view(
+            batch, frames, -1
+        )
 
         # overlap-add
         filtered = filtered.transpose(1, 2)

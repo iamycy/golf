@@ -239,6 +239,44 @@ class SawSing(VocoderParameterEncoderInterface):
         )
 
 
+class DDSPAdd(VocoderParameterEncoderInterface):
+    def __init__(
+        self,
+        num_harmonics: int,
+        noise_n_mag: int,
+        *args,
+        extra_split_sizes: List[int] = [],
+        kwargs: dict = {},
+    ):
+        super().__init__(
+            *args,
+            extra_split_sizes=extra_split_sizes + [1, num_harmonics, noise_n_mag],
+            **kwargs,
+        )
+
+    def forward(
+        self, h: Tensor
+    ) -> Tuple[
+        Tuple[Tensor, Optional[Tensor]],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+    ]:
+        *f0_params, log_loudness, harmonics_logits, noise_log_mag = super().forward(h)
+        loudness = log_loudness.exp()
+        harmonics = harmonics_logits.softmax(-1)
+        amplitudes = harmonics * loudness.unsqueeze(-1)
+
+        return (
+            f0_params,
+            (amplitudes,),
+            (),
+            (noise_log_mag,),
+            (),
+        )
+
+
 class MLSAEnc(VocoderParameterEncoderInterface):
     def __init__(
         self,

@@ -393,11 +393,32 @@ class SawToothOscillator(HarmonicOscillator):
 
 
 class PulseTrain(OscillatorInterface):
-    def forward(self, upsampled_phase: Tensor) -> Tensor:
+    def forward(self, upsampled_phase: Tensor, **kwargs) -> Tensor:
         # Make mask represents voiced region.
         wrapped_phase = torch.cumsum(upsampled_phase, dim=1) % 1
         phase_transition = (wrapped_phase[:, 1:] - wrapped_phase[:, :-1]) < 0
         out = torch.zeros_like(upsampled_phase)
         out[:, 1:][phase_transition] = upsampled_phase[:, 1:][phase_transition].rsqrt()
         return out
-    
+
+
+class AdditivePulseTrain(HarmonicOscillator):
+    def __init__(self, num_harmonics: int = 155) -> None:
+        super().__init__()
+        self.num_harmonics = num_harmonics
+
+    def forward(
+        self,
+        upsampled_phase: Tensor,
+        initial_phase: Optional[Tensor] = None,
+        **kwargs,
+    ) -> Tensor:
+        amplitudes = (
+            torch.ones_like(upsampled_phase)
+            .unsqueeze(-1)
+            .repeat(1, 1, self.num_harmonics)
+        )
+        num_freq_bins = 0.5 / upsampled_phase
+        amplitudes = amplitudes * num_freq_bins.unsqueeze(-1).rsqrt()
+        ctx = TimeContext(1)
+        return super().forward(upsampled_phase, amplitudes, ctx, initial_phase)

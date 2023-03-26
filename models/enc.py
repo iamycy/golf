@@ -56,13 +56,7 @@ class VocoderParameterEncoderInterface(nn.Module):
 
     def forward(
         self, h: Tensor
-    ) -> Tuple[
-        Tuple[Tensor, Optional[Tensor]],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-    ]:
+    ) -> Tuple[Tuple[Tensor, Optional[Tensor]], ...,]:
         """
         Args:
             h: (batch_size, frames, features)
@@ -242,4 +236,42 @@ class SawSing(VocoderParameterEncoderInterface):
             (voice_log_mag,),
             (noise_log_mag,),
             (),
+        )
+
+
+class MLSAEnc(VocoderParameterEncoderInterface):
+    def __init__(
+        self,
+        sp_mcep_order: int,
+        ap_mcep_order: int,
+        *args,
+        extra_split_sizes: List[int] = [],
+        kwargs: dict = {},
+    ):
+        super().__init__(
+            *args,
+            extra_split_sizes=extra_split_sizes
+            + [sp_mcep_order + 1, ap_mcep_order + 1],
+            **kwargs,
+        )
+
+        self.backbone.out_linear.weight.data.zero_()
+        self.backbone.out_linear.bias.data.zero_()
+
+    def forward(
+        self, h: Tensor
+    ) -> Tuple[
+        Tuple[Tensor, Optional[Tensor]],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+    ]:
+        *f0_params, sp_mc, ap_mc_logits = super().forward(h)
+        ap_mc = ap_mc_logits.sigmoid()
+
+        return (
+            f0_params,
+            (),
+            (ap_mc,),
+            (sp_mc,),
         )

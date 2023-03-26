@@ -8,6 +8,7 @@ from torchaudio.transforms import MelSpectrogram
 
 from models.utils import get_window_fn
 from models.hpn import HarmonicPlusNoiseSynth
+from models.sf import SourceFilterSynth
 from models.enc import VocoderParameterEncoderInterface
 from models.utils import TimeContext
 
@@ -73,7 +74,7 @@ class DDSPVocoder(pl.LightningModule):
     def __init__(
         self,
         encoder: VocoderParameterEncoderInterface,
-        decoder: HarmonicPlusNoiseSynth,
+        decoder: Union[HarmonicPlusNoiseSynth, SourceFilterSynth],
         feature_trsfm: ScaledLogMelSpectrogram,
         criterion: nn.Module,
         window: str = "hanning",
@@ -105,10 +106,7 @@ class DDSPVocoder(pl.LightningModule):
     def forward(self, feats: torch.Tensor):
         (
             f0_params,
-            harm_osc_params,
-            harm_filt_params,
-            noise_filt_params,
-            noise_params,
+            *other_params,
         ) = self.encoder(feats)
 
         f0, *voicing_param = f0_params
@@ -123,12 +121,9 @@ class DDSPVocoder(pl.LightningModule):
             f0,
             *voicing_param,
             self.decoder(
+                ctx,
                 phase_params,
-                harm_osc_params,
-                harm_filt_params,
-                noise_filt_params,
-                ctx=ctx,
-                noise_params=noise_params,
+                *other_params,
             ),
         )
 
@@ -145,10 +140,7 @@ class DDSPVocoder(pl.LightningModule):
         feats = self.feature_trsfm(x)
         (
             f0_params,
-            harm_osc_params,
-            harm_filt_params,
-            noise_filt_params,
-            noise_params,
+            *other_params,
         ) = self.encoder(feats)
 
         f0_hat, *voicing_param = f0_params
@@ -178,12 +170,9 @@ class DDSPVocoder(pl.LightningModule):
         phase_params = (phase,) if voicing is None else (phase, voicing)
         ctx = TimeContext(self.hop_length)
         x_hat = self.decoder(
+            ctx,
             phase_params,
-            harm_osc_params,
-            harm_filt_params,
-            noise_filt_params,
-            ctx=ctx,
-            noise_params=noise_params,
+            *other_params,
         )
 
         x = x[..., : x_hat.shape[-1]]

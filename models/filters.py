@@ -395,4 +395,7 @@ class LTVMLSAFilter(LTVFilterInterface):
         )
 
     def forward(self, ex: Tensor, mc: Tensor, ctx: TimeContext, **kwargs):
+        minimum_frames = ex.shape[1] // self.mlsa.frame_period
+        ex = ex[:, : minimum_frames * self.mlsa.frame_period]
+        mc = mc[:, :minimum_frames]
         return self.mlsa(ex, mc)

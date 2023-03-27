@@ -194,7 +194,7 @@ class TimeContext(object):
 
 def linear_upsample(x: Tensor, ctx: TimeContext) -> Tensor:
     return F.interpolate(
-        x.view(-1, 1, x.size(-1)),
+        x.reshape(-1, 1, x.size(-1)),
         (x.size(-1) - 1) * ctx.hop_length + 1,
         mode="linear",
         align_corners=True,

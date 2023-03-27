@@ -59,8 +59,10 @@ class HarmonicPlusNoiseSynth(nn.Module):
         if self.noise_filter is not None:
             noise = self.noise_filter(noise, *noise_filt_params, ctx=ctx)
 
+        out = harm_osc[:, : noise.shape[1]] + noise[:, : harm_osc.shape[1]]
+
         # Static components
         if self.end_filter is not None:
-            return self.end_filter(harm_osc + noise)
+            return self.end_filter(out)
         else:
-            return harm_osc + noise
+            return out

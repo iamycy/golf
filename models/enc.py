@@ -265,8 +265,10 @@ class DDSPAdd(VocoderParameterEncoderInterface):
     ]:
         *f0_params, log_loudness, harmonics_logits, noise_log_mag = super().forward(h)
         loudness = log_loudness.exp()
-        harmonics = harmonics_logits.softmax(-1)
-        amplitudes = harmonics * loudness.unsqueeze(-1)
+        # harmonics = harmonics_logits.softmax(-1)
+        harmonics = harmonics_logits.sigmoid()
+        harmonics = harmonics / harmonics.sum(-1, keepdim=True)
+        amplitudes = harmonics * loudness
 
         return (
             f0_params,

@@ -324,3 +324,59 @@ class MLSAEnc(VocoderParameterEncoderInterface):
             (ap_mc,),
             (sp_mc,),
         )
+
+
+class PulseTrainRealCoeffLPCEncoder(VocoderParameterEncoderInterface):
+    def __init__(
+        self,
+        voice_lpc_order: int,
+        noise_lpc_order: int,
+        *args,
+        max_abs_value: float = 0.99,
+        extra_split_sizes: List[int] = [],
+        kwargs: dict = {},
+    ):
+        super().__init__(
+            *args,
+            extra_split_sizes=extra_split_sizes
+            + [voice_lpc_order, 1, noise_lpc_order, 1],
+            **kwargs,
+        )
+
+        self.logits2biquads = get_logits2biquads("real", max_abs_value)
+        self.backbone.out_linear.weight.data.zero_()
+        self.backbone.out_linear.bias.data.zero_()
+        self.backbone.out_linear.bias.data[-1] = -10  # initialize noise gain
+
+    def forward(
+        self, h: Tensor
+    ) -> Tuple[
+        Tuple[Tensor, Optional[Tensor]],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+    ]:
+        batch, frames, _ = h.shape
+        (
+            *f0_params,
+            voice_lpc_logits,
+            voice_log_gain,
+            noise_lpc_logits,
+            noise_log_gain,
+        ) = super().forward(h)
+        voice_biquads = self.logits2biquads(voice_lpc_logits.view(batch, frames, -1, 2))
+        noise_biquads = self.logits2biquads(noise_lpc_logits.view(batch, frames, -1, 2))
+        voice_lpc_coeffs = biquads2lpc(voice_biquads)
+        noise_lpc_coeffs = biquads2lpc(noise_biquads)
+
+        voice_gain = voice_log_gain.squeeze(-1).exp()
+        noise_gain = noise_log_gain.squeeze(-1).exp()
+
+        return (
+            f0_params,
+            (),
+            (voice_gain, voice_lpc_coeffs),
+            (noise_gain, noise_lpc_coeffs),
+            (),
+        )

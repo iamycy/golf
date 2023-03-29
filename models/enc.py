@@ -254,6 +254,15 @@ class DDSPAdd(VocoderParameterEncoderInterface):
             **kwargs,
         )
 
+        self.backbone.out_linear.weight.data.zero_()
+        offset = 1 if self.learn_voicing else 0
+        self.backbone.out_linear.bias.data[
+            offset : offset + 1 + num_harmonics
+        ] = 0  # initialize f0
+        self.backbone.out_linear.bias.data[
+            offset + 1 + num_harmonics :
+        ] = -10  # initialize magnitude close to zero
+
     def forward(
         self, h: Tensor
     ) -> Tuple[

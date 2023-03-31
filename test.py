@@ -5,9 +5,11 @@ import torchaudio
 import numpy as np
 from tqdm import tqdm
 import yaml
+from typing import List
 from importlib import import_module
 import pyworld as pw
 from functools import partial
+from frechet_audio_distance import FrechetAudioDistance
 
 from datasets.mpop600 import MPop600Dataset
 from loss.spec import MSSLoss
@@ -33,6 +35,33 @@ get_f0 = partial(
     channels_in_octave=2,
     frame_period=5,
 )
+
+
+def get_fad(x_pred: List[np.ndarray], x_true: List[np.ndarray]):
+    frechet = FrechetAudioDistance(use_pca=False, use_activation=False, verbose=True)
+
+    embds_background = []
+    for x in x_pred:
+        embd = frechet.model.forward(x, 24000).cpu().numpy()
+        embds_background.append(embd)
+    embds_background = np.concatenate(embds_background, axis=0)
+
+    embds_eval = []
+    for x in x_true:
+        embd = frechet.model.forward(x, 24000).cpu().numpy()
+        embds_eval.append(embd)
+    embds_eval = np.concatenate(embds_eval, axis=0)
+
+    mu_background, sigma_background = frechet.calculate_embd_statistics(
+        embds_background
+    )
+    mu_eval, sigma_eval = frechet.calculate_embd_statistics(embds_eval)
+
+    fad_score = frechet.calculate_frechet_distance(
+        mu_background, sigma_background, mu_eval, sigma_eval
+    )
+
+    return fad_score
 
 
 @torch.no_grad()
@@ -92,7 +121,6 @@ def main():
         data_postfix = MPop600Dataset.test_file_postfix
 
     metric1 = MSSLoss([512, 1024, 2048], window="hanning").to(device)
-    # metric2 = torch.nn.L1Loss().to(device)
 
     wav_dir = pathlib.Path(args.data)
 
@@ -105,6 +133,8 @@ def main():
         [f for f in wav_dir.glob("*.wav") if f.name.split("_")[1] in data_postfix]
     )
 
+    x_pred = []
+    x_true = []
     for f in pbar:
         x, sr = torchaudio.load(f)
         x = x.to(device)
@@ -117,6 +147,8 @@ def main():
         x_hat = x_hat[:, : x.shape[1]]
         x = x[:, : x_hat.shape[1]]
         loss = metric1(x_hat, x)
+        x_pred.append(x_hat.squeeze().cpu().numpy())
+        x_true.append(x.squeeze().cpu().numpy())
 
         # f0 loss in cent
         f0_hat, _ = get_f0(x_hat.squeeze().cpu().numpy().astype(np.float64), sr)
@@ -143,6 +175,8 @@ def main():
     avg_loss = np.average(losses, weights=[f / total_frames for f in frames])
     print(total_frames, total_valid_f0_frames)
     print(f"Loss: {avg_loss:.4f}, F0 Loss: {total_f0_loss / total_valid_f0_frames:.4f}")
+    fad = get_fad(x_pred, x_true)
+    print(f"FAD: {fad:.4f}")
 
 
 if __name__ == "__main__":

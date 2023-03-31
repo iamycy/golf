@@ -2,3 +2,5 @@
 .ipynb_checkpoints/
 lightning_logs/
 best_ckpts/
+home_ckpts/
+for_comparison/

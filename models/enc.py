@@ -343,7 +343,7 @@ class PulseTrainRealCoeffLPCEncoder(VocoderParameterEncoderInterface):
             **kwargs,
         )
 
-        self.logits2biquads = get_logits2biquads("real", max_abs_value)
+        self.logits2biquads = get_logits2biquads("coef", max_abs_value)
         self.backbone.out_linear.weight.data.zero_()
         self.backbone.out_linear.bias.data.zero_()
         self.backbone.out_linear.bias.data[-1] = -10  # initialize noise gain

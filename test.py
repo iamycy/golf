@@ -39,6 +39,7 @@ get_f0 = partial(
 
 def get_fad(x_pred: List[np.ndarray], x_true: List[np.ndarray]):
     frechet = FrechetAudioDistance(use_pca=False, use_activation=False, verbose=True)
+    frechet.model = frechet.model.to(device)
 
     embds_background = []
     for x in x_pred:
@@ -85,10 +86,12 @@ def main():
     model_configs["feature_trsfm"]["init_args"]["hop_length"] = model_configs[
         "hop_length"
     ]
-    model_configs["feature_trsfm"] = get_instance(model_configs["feature_trsfm"])
+    feature_trsfm = model_configs["feature_trsfm"] = get_instance(
+        model_configs["feature_trsfm"]
+    )
 
     model_configs["encoder"] = get_instance(model_configs["encoder"])
-    model_configs["criterion"] = get_instance(model_configs["criterion"])
+    metric1 = model_configs["criterion"] = get_instance(model_configs["criterion"])
 
     model_configs["decoder"]["init_args"]["harm_oscillator"] = get_instance(
         model_configs["decoder"]["init_args"]["harm_oscillator"]
@@ -120,7 +123,11 @@ def main():
     else:
         data_postfix = MPop600Dataset.test_file_postfix
 
-    metric1 = MSSLoss([512, 1024, 2048], window="hanning").to(device)
+    # metric1 = MSSLoss([512, 1024, 2048], window="hanning").to(device)
+    metric1 = metric1.to(device)
+    feature_trsfm = feature_trsfm.to(device)
+
+    print(feature_trsfm.log_mel_min, feature_trsfm.log_mel_max)
 
     wav_dir = pathlib.Path(args.data)
 
@@ -142,7 +149,7 @@ def main():
         # f0 = torch.from_numpy(f0).to(device)
 
         # mss loss
-        mel = model.feature_trsfm(x)
+        mel = feature_trsfm(x)
         f0_hat, *_, x_hat = model(mel)
         x_hat = x_hat[:, : x.shape[1]]
         x = x[:, : x_hat.shape[1]]

@@ -65,6 +65,16 @@ def get_fad(x_pred: List[np.ndarray], x_true: List[np.ndarray]):
     return fad_score
 
 
+def dict2object(config: dict):
+    for k in config.keys():
+        v = config[k]
+        if isinstance(v, dict):
+            config[k] = dict2object(v)
+    if "class_path" in config:
+        return get_instance(config)
+    return config
+
+
 @torch.no_grad()
 def main():
     parser = argparse.ArgumentParser()
@@ -86,34 +96,35 @@ def main():
     model_configs["feature_trsfm"]["init_args"]["hop_length"] = model_configs[
         "hop_length"
     ]
-    feature_trsfm = model_configs["feature_trsfm"] = get_instance(
-        model_configs["feature_trsfm"]
-    )
+    model_configs = dict2object(model_configs)
+    # feature_trsfm = model_configs["feature_trsfm"] = get_instance(
+    #     model_configs["feature_trsfm"]
+    # )
 
-    model_configs["encoder"] = get_instance(model_configs["encoder"])
-    metric1 = model_configs["criterion"] = get_instance(model_configs["criterion"])
+    # model_configs["encoder"] = get_instance(model_configs["encoder"])
+    # metric1 = model_configs["criterion"] = get_instance(model_configs["criterion"])
 
-    model_configs["decoder"]["init_args"]["harm_oscillator"] = get_instance(
-        model_configs["decoder"]["init_args"]["harm_oscillator"]
-    )
-    model_configs["decoder"]["init_args"]["noise_generator"] = get_instance(
-        model_configs["decoder"]["init_args"]["noise_generator"]
-    )
+    # model_configs["decoder"]["init_args"]["harm_oscillator"] = get_instance(
+    #     model_configs["decoder"]["init_args"]["harm_oscillator"]
+    # )
+    # model_configs["decoder"]["init_args"]["noise_generator"] = get_instance(
+    #     model_configs["decoder"]["init_args"]["noise_generator"]
+    # )
 
-    if model_configs["decoder"]["init_args"]["harm_filter"] is not None:
-        model_configs["decoder"]["init_args"]["harm_filter"] = get_instance(
-            model_configs["decoder"]["init_args"]["harm_filter"]
-        )
-    if model_configs["decoder"]["init_args"]["noise_filter"] is not None:
-        model_configs["decoder"]["init_args"]["noise_filter"] = get_instance(
-            model_configs["decoder"]["init_args"]["noise_filter"]
-        )
-    if model_configs["decoder"]["init_args"]["end_filter"] is not None:
-        model_configs["decoder"]["init_args"]["end_filter"] = get_instance(
-            model_configs["decoder"]["init_args"]["end_filter"]
-        )
+    # if model_configs["decoder"]["init_args"]["harm_filter"] is not None:
+    #     model_configs["decoder"]["init_args"]["harm_filter"] = get_instance(
+    #         model_configs["decoder"]["init_args"]["harm_filter"]
+    #     )
+    # if model_configs["decoder"]["init_args"]["noise_filter"] is not None:
+    #     model_configs["decoder"]["init_args"]["noise_filter"] = get_instance(
+    #         model_configs["decoder"]["init_args"]["noise_filter"]
+    #     )
+    # if model_configs["decoder"]["init_args"]["end_filter"] is not None:
+    #     model_configs["decoder"]["init_args"]["end_filter"] = get_instance(
+    #         model_configs["decoder"]["init_args"]["end_filter"]
+    #     )
 
-    model_configs["decoder"] = get_instance(model_configs["decoder"])
+    # model_configs["decoder"] = get_instance(model_configs["decoder"])
 
     model = DDSPVocoder.load_from_checkpoint(args.ckpt, **model_configs).to(device)
     model.eval()
@@ -124,8 +135,12 @@ def main():
         data_postfix = MPop600Dataset.test_file_postfix
 
     # metric1 = MSSLoss([512, 1024, 2048], window="hanning").to(device)
-    metric1 = metric1.to(device)
-    feature_trsfm = feature_trsfm.to(device)
+    # metric1 = metric1.to(device)
+    metric1 = model.criterion
+    feature_trsfm = model.feature_trsfm
+    # feature_trsfm = feature_trsfm.to(device)
+    # metric1.eval()
+    # feature_trsfm.eval()
 
     print(feature_trsfm.log_mel_min, feature_trsfm.log_mel_max)
 

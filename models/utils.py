@@ -1,5 +1,8 @@
 import torch
 from torch import Tensor
+import numpy as np
+import pyworld as pw
+from functools import partial
 import torch.nn.functional as F
 import math
 from typing import Callable, Optional, Tuple, Union, List
@@ -229,3 +232,16 @@ def hilbert(x: Tensor, dim: int = -1) -> Tensor:
         h = h[tuple(ind)]
     x = torch.fft.ifft(Xf * h, dim=dim)
     return x
+
+
+def freq2cent(f0):
+    return 1200 * np.log2(f0 / 440)
+
+
+get_f0 = partial(
+    pw.dio,
+    f0_floor=65,
+    f0_ceil=1047,
+    channels_in_octave=2,
+    frame_period=5,
+)

@@ -1,0 +1,15 @@
+numpy
+scipy
+pandas
+torch>=2.0.0
+torchaudio>=2.0.0
+pytorch-lightning==1.9.4
+tqdm
+matplotlib
+kazane
+torch_fftconv
+pyword
+pysptk
+diffsptk
+pyloudnorm
+frechet_audio_distance

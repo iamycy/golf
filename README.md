@@ -9,7 +9,7 @@
 pip install requirements.txt
 ```
 
-2. Download the [MPop600](https://ieeexplore.ieee.org/document/9306461) dataset. The dataset is conducted in a `download-by-request` manner. Please contact the authors or me to get the raw files.
+2. Download the [MPop600](https://ieeexplore.ieee.org/document/9306461) dataset. The dataset is conducted in a _download-by-request_ manner. Please contact the authors or me to get the raw files.
 
 3. Resample the data to 24 kHz.
 

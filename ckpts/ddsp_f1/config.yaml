@@ -1,0 +1,165 @@
+# pytorch_lightning==1.9.4
+seed_everything: true
+trainer:
+  logger: true
+  enable_checkpointing: true
+  callbacks:
+  - class_path: pytorch_lightning.callbacks.ModelCheckpoint
+    init_args:
+      dirpath: null
+      filename: '{epoch}-{step}-{val_loss:.3f}'
+      monitor: val_loss
+      verbose: false
+      save_last: true
+      save_top_k: 3
+      save_weights_only: false
+      mode: min
+      auto_insert_metric_name: true
+      every_n_train_steps: null
+      train_time_interval: null
+      every_n_epochs: null
+      save_on_train_epoch_end: false
+  default_root_dir: null
+  gradient_clip_val: null
+  gradient_clip_algorithm: null
+  num_nodes: 1
+  num_processes: null
+  devices: null
+  gpus: 1
+  auto_select_gpus: null
+  tpu_cores: null
+  ipus: null
+  enable_progress_bar: true
+  overfit_batches: 0.0
+  track_grad_norm: -1
+  check_val_every_n_epoch: 10
+  fast_dev_run: false
+  accumulate_grad_batches: null
+  max_epochs: null
+  min_epochs: null
+  max_steps: 800000
+  min_steps: null
+  max_time: null
+  limit_train_batches: null
+  limit_val_batches: null
+  limit_test_batches: null
+  limit_predict_batches: null
+  val_check_interval: null
+  log_every_n_steps: 1
+  accelerator: gpu
+  strategy: null
+  sync_batchnorm: false
+  precision: 32
+  enable_model_summary: true
+  num_sanity_val_steps: 0
+  resume_from_checkpoint: null
+  profiler: null
+  benchmark: null
+  deterministic: null
+  reload_dataloaders_every_n_epochs: 0
+  auto_lr_find: false
+  replace_sampler_ddp: true
+  detect_anomaly: false
+  auto_scale_batch_size: false
+  plugins: null
+  amp_backend: null
+  amp_level: null
+  move_metrics_to_cpu: false
+  multiple_trainloader_mode: max_size_cycle
+  inference_mode: true
+model:
+  encoder:
+    class_path: models.enc.DDSPAdd
+    init_args:
+      num_harmonics: 150
+      noise_n_mag: 80
+      extra_split_sizes: []
+      kwargs:
+        learn_voicing: true
+        backbone_type: models.mel.Mel2Control
+        in_channels: 80
+        hidden_channels: 96
+        num_layers: 3
+        dropout: 0.1
+  decoder:
+    class_path: models.hpn.HarmonicPlusNoiseSynth
+    init_args:
+      harm_oscillator:
+        class_path: models.synth.HarmonicOscillator
+      noise_generator:
+        class_path: models.noise.StandardNormalNoise
+      harm_filter: null
+      noise_filter:
+        class_path: models.filters.LTVZeroPhaseFIRFilter
+        init_args:
+          window: hanning
+          conv_method: direct
+      end_filter: null
+  feature_trsfm:
+    class_path: ltng.vocoder.ScaledLogMelSpectrogram
+    init_args:
+      n_fft: 1024
+      win_length: null
+      f_min: 0.0
+      f_max: null
+      pad: 0
+      n_mels: 80
+      power: 2.0
+      normalized: false
+      wkwargs: null
+      center: true
+      pad_mode: reflect
+      onesided: null
+      norm: null
+      mel_scale: htk
+  criterion:
+    class_path: loss.spec.MSSLoss
+    init_args:
+      n_ffts:
+      - 1024
+      - 2048
+      - 512
+      alpha: 1.0
+      ratio: 1.0
+      overlap: 0.75
+      window: hanning
+      win_length: null
+      pad: 0
+      normalized: false
+      wkwargs: null
+      center: true
+      pad_mode: reflect
+      onesided: true
+      return_complex: null
+  window: hanning
+  sample_rate: 24000
+  hop_length: 120
+  detach_f0: true
+  detach_voicing: true
+  train_with_true_f0: false
+  l1_loss_weight: 0.0
+  f0_loss_weight: 1.0
+  voicing_loss_weight: 1.0
+ckpt_path: null
+data:
+  class_path: ltng.data.MPop600
+  init_args:
+    batch_size: 32
+    wav_dir: /home/ycy/data-disk/Datasets/MPop600/f1/audio_24k/
+    duration: 2.0
+    overlap: 1.5
+optimizer:
+  class_path: torch.optim.Adam
+  init_args:
+    lr: 0.0005
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+    weight_decay: 0.0
+    amsgrad: false
+    foreach: null
+    maximize: false
+    capturable: false
+    differentiable: false
+    fused: null

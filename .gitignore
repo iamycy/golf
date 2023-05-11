@@ -4,3 +4,5 @@ lightning_logs/
 best_ckpts/
 home_ckpts/
 for_comparison/
+mos_data/
+zips/

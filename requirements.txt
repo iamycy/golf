@@ -12,4 +12,5 @@ pyword
 pysptk
 diffsptk
 pyloudnorm
+samplerate
 frechet_audio_distance

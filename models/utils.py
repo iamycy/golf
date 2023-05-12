@@ -5,7 +5,133 @@ import pyworld as pw
 from functools import partial
 import torch.nn.functional as F
 import math
-from typing import Callable, Optional, Tuple, Union, List
+from typing import Any, Callable, Optional, Tuple, Union, List
+
+
+class TimeTensor(object):
+    def __init__(
+        self,
+        data: Union[Tensor, np.ndarray],
+        names: Tuple[str, ...] = None,
+        hop_length: int = 1,
+        **kwargs,
+    ):
+        self.hop_length = hop_length
+        self._data = torch.as_tensor(data, **kwargs)
+        if names is not None:
+            self._data = self._data.refine_names(*names)
+        if self._data.names is not None:
+            assert "T" in self._data.names, "TimeTensor must have a time dimension"
+
+    def __repr__(self):
+        return f"Hop-length: {self.hop_length}\n" + repr(self._data)
+
+    @property
+    def shape(self):
+        return self._data.shape
+
+    @property
+    def names(self):
+        return self._data.names
+
+    @property
+    def device(self):
+        return self._data.device
+
+    @property
+    def dtype(self):
+        return self._data.dtype
+
+    @property
+    def size(self):
+        return self._data.size
+
+    def __add__(self, other):
+        return torch.add(self, other)
+
+    def __sub__(self, other):
+        return torch.sub(self, other)
+
+    def __mul__(self, other):
+        return torch.mul(self, other)
+
+    def __truediv__(self, other):
+        return torch.div(self, other)
+
+    def __floordiv__(self, other):
+        return torch.floor_divide(self, other)
+
+    def __mod__(self, other):
+        return torch.remainder(self, other)
+
+    def align_to(self, *names: str):
+        return TimeTensor(self._data.align_to(*names), hop_length=self.hop_length)
+
+    def reduce_hop_length(self, factor: int = None):
+        if factor is None:
+            factor = self.hop_length
+        else:
+            assert self.hop_length % factor == 0 and factor <= self.hop_length
+
+        # swap the time dimension to the last
+        self_copy = self._data.align_to(..., "T")
+        self_copy_names = self_copy.names
+        ctx = TimeContext(factor)
+        expand_self_copy = (
+            linear_upsample(ctx, self_copy.rename(None))
+            .rename(*self_copy_names)
+            .align_to(*self._data.names)
+        )
+        return TimeTensor(expand_self_copy, hop_length=self.hop_length // factor)
+
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        if func in (
+            torch.add,
+            torch.mul,
+            torch.div,
+            torch.sub,
+            torch.floor_divide,
+            torch.remainder,
+        ):
+            time_tensors = tuple(a for a in args if isinstance(a, TimeTensor))
+            time_tensors = TimeTensor.broadcast_time_dim(*time_tensors)
+            broadcasted_args = []
+            i = 0
+            for a in args:
+                if isinstance(a, TimeTensor):
+                    broadcasted_args.append(time_tensors[i])
+                    i += 1
+                else:
+                    broadcasted_args.append(a)
+            args = broadcasted_args
+        if kwargs is None:
+            kwargs = {}
+        hop_lengths = tuple(a.hop_length for a in args if isinstance(a, TimeTensor))
+        assert len(hop_lengths) > 0 and all(
+            h == hop_lengths[0] for h in hop_lengths
+        ), "All TimeTensors must have the same hop length"
+        args = tuple(a._data if isinstance(a, TimeTensor) else a for a in args)
+
+        ret = func(*args, **kwargs)
+        return TimeTensor(ret, hop_length=hop_lengths[0])
+
+    @classmethod
+    def broadcast_time_dim(cls, *tensors):
+        assert len(tensors) > 0
+        # check hop lengths are divisible by each other
+        hop_lengths = tuple(t.hop_length for t in tensors)
+        minimum_hop_length = min(hop_lengths)
+        assert all(
+            h % minimum_hop_length == 0 for h in hop_lengths
+        ), "All hop lengths must be divisible by each other"
+        ret = tuple(
+            t.reduce_hop_length(t.hop_length // minimum_hop_length)
+            if t.hop_length > minimum_hop_length
+            else t
+            for t in tensors
+        )
+        return ret
 
 
 def get_transformed_lf(
@@ -195,7 +321,7 @@ class TimeContext(object):
         return TimeContext(hop_length * self.hop_length)
 
 
-def linear_upsample(x: Tensor, ctx: TimeContext) -> Tensor:
+def linear_upsample(ctx: TimeContext, x: Tensor) -> Tensor:
     return F.interpolate(
         x.reshape(-1, 1, x.size(-1)),
         (x.size(-1) - 1) * ctx.hop_length + 1,

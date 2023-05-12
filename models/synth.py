@@ -4,7 +4,10 @@ import torch.nn.functional as F
 import math
 from typing import Optional, Union, List, Tuple, Callable
 
-from .utils import get_transformed_lf, TimeContext, linear_upsample, smooth_phase_offset
+from .utils import (
+    get_transformed_lf,
+    TimeTensor,
+)
 
 
 __all__ = [
@@ -22,6 +25,13 @@ def check_input_hook(m, args):
     assert torch.all(upsampled_phase >= 0) and torch.all(upsampled_phase <= 0.5)
 
 
+def check_output_hook(m, args, out):
+    out = out[0]
+    assert out.ndim == 2, out.shape
+    assert isinstance(out, TimeTensor)
+    assert out.hop_length == 1
+
+
 def check_weight_hook(m, args):
     _, weight, *args = args
     assert torch.all(weight >= 0) and torch.all(weight <= 1)
@@ -31,13 +41,14 @@ class OscillatorInterface(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self._input_handle = self.register_forward_pre_hook(check_input_hook)
+        self._output_handle = self.register_forward_hook(check_output_hook)
 
     def forward(
         self,
-        upsampled_phase: Tensor,
+        phase: TimeTensor,
         *args,
         **kwargs,
-    ) -> Tensor:
+    ) -> TimeTensor:
         raise NotImplementedError
 
 
@@ -104,15 +115,19 @@ class GlottalFlowTable(OscillatorInterface):
         # self._table_weight_handle = self.register_forward_pre_hook(check_weight_hook)
 
     @staticmethod
-    def generate(wrapped_phase: Tensor, tables: Tensor, ctx: TimeContext) -> Tensor:
+    def generate(wrapped_phase: TimeTensor, tables: TimeTensor) -> TimeTensor:
         """
         Args:
             wrapped_phase: (batch, seq_len)
             tables: (batch, seq_len / hop_length + 1, table_size)
             hop_length: int
         """
+        assert wrapped_phase.hop_length == 1
+        wrapped_phase = wrapped_phase.align_to("B", "T").as_tensor()
         batch, seq_len = wrapped_phase.shape
-        hop_length = ctx.hop_length
+        hop_length = tables.hop_length
+        tables = tables.align_to("B", "T", "D").as_tensor()
+
         # pad phase to have multiple of hop_length
         pad_length = (hop_length - seq_len % hop_length) % hop_length
         wrapped_phase = F.pad(wrapped_phase, (0, pad_length), "replicate")
@@ -187,16 +202,18 @@ class GlottalFlowTable(OscillatorInterface):
         final_flow = selected_floor_flow * (1 - p2) + selected_ceil_flow * p2
         final_flow = final_flow.view(batch, -1)[:, :seq_len]
 
-        return final_flow
+        return TimeTensor(final_flow, names=("B", "T"))
 
     def forward(
-        self, upsampled_phase: Tensor, table_select_weight: Tensor, ctx: TimeContext
-    ) -> Tensor:
+        self,
+        phase: TimeTensor,
+        table_select_weight: TimeTensor,
+        *args,
+    ) -> TimeTensor:
         """
         input:
             upsampled_phase: (batch, seq_len)
             table_select_weight: (batch, seq_len / hop_length, ...)
-            ctx: TimeContext
         """
 
         raise NotImplementedError
@@ -205,10 +222,9 @@ class GlottalFlowTable(OscillatorInterface):
 class IndexedGlottalFlowTable(GlottalFlowTable):
     def forward(
         self,
-        upsampled_phase: Tensor,
-        table_select_weight: Tensor,
-        ctx: TimeContext,
-        upsampled_phase_offset: Tensor = None,
+        phase: TimeTensor,
+        table_select_weight: TimeTensor,
+        phase_offset: TimeTensor = None,
     ) -> Tensor:
         assert table_select_weight.dim() == 2
         assert torch.all(table_select_weight >= 0) and torch.all(
@@ -229,20 +245,25 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
             )
             * p
         )
-        wrapped_phase = upsampled_phase.cumsum(1)
-        if upsampled_phase_offset is not None:
-            wrapped_phase = upsampled_phase_offset + wrapped_phase
-        wrapped_phase = wrapped_phase % 1
-        return self.generate(wrapped_phase, interp_tables, ctx)
+        interp_tables = TimeTensor(
+            interp_tables,
+            names=("B", "T", "D"),
+            hop_length=table_select_weight.hop_length,
+        )
+        upsampled_phase = phase.align_to("B", "T").reduce_hop_length()
+        instant_phase = upsampled_phase.cumsum("T")
+        if phase_offset is not None:
+            instant_phase = instant_phase + phase_offset.align_to("B", "T")
+        wrapped_phase = instant_phase % 1
+        return self.generate(wrapped_phase, interp_tables)
 
 
 class WeightedGlottalFlowTable(GlottalFlowTable):
     def forward(
         self,
-        upsampled_phase: Tensor,
-        table_select_weight: Tensor,
-        ctx: TimeContext,
-        upsampled_phase_offset: Tensor = None,
+        phase: TimeTensor,
+        table_select_weight: TimeTensor,
+        phase_offset: TimeTensor = None,
     ) -> Tensor:
         assert table_select_weight.dim() == 3
         assert table_select_weight.shape[2] == self.table.shape[0]
@@ -250,11 +271,11 @@ class WeightedGlottalFlowTable(GlottalFlowTable):
             table_select_weight <= 1
         )
         weighted_tables = table_select_weight @ self.table
-        wrapped_phase = upsampled_phase.cumsum(1)
-        if upsampled_phase_offset is not None:
-            wrapped_phase = upsampled_phase_offset + wrapped_phase
-        wrapped_phase = wrapped_phase % 1
-        return self.generate(wrapped_phase, weighted_tables, ctx)
+        instant_phase = phase.align_to("B", "T").reduce_hop_length().cumsum("T")
+        if phase_offset is not None:
+            instant_phase = instant_phase + phase_offset.align_to("B", "T")
+        wrapped_phase = instant_phase % 1
+        return self.generate(wrapped_phase, weighted_tables)
 
 
 def get_downsampler(hop_rate: int, in_channels: int, output_channels: int):
@@ -294,20 +315,20 @@ class DownsampledIndexedGlottalFlowTable(IndexedGlottalFlowTable):
 
     def forward(
         self,
-        upsampled_phase: Tensor,
-        h: Tensor,
-        ctx: TimeContext,
-        upsampled_phase_offset: Tensor = None,
-    ) -> Tensor:
+        phase: TimeTensor,
+        h: TimeTensor,
+        *args,
+    ) -> TimeTensor:
         """
         input:
             upsampled_phase: (batch, seq_len)
             h: (batch, frames, in_channels)
         """
         table_control = self.model(h.transpose(1, 2)).squeeze(1).sigmoid()
-        return super().forward(
-            upsampled_phase, table_control, ctx(self.hop_rate), upsampled_phase_offset
+        table_control = TimeTensor(
+            table_control, names=("B", "T"), hop_length=h.hop_length * self.hop_rate
         )
+        return super().forward(phase, table_control, *args)
 
 
 class DownsampledWeightedGlottalFlowTable(WeightedGlottalFlowTable):
@@ -326,20 +347,22 @@ class DownsampledWeightedGlottalFlowTable(WeightedGlottalFlowTable):
 
     def forward(
         self,
-        upsampled_phase: Tensor,
-        h: Tensor,
-        ctx: TimeContext,
-        upsampled_phase_offset: Tensor = None,
-    ) -> Tensor:
+        phase: TimeTensor,
+        h: TimeTensor,
+        *args,
+    ) -> TimeTensor:
         """
         input:
             upsampled_phase: (batch, seq_len)
             h: (batch, frames, in_channels)
         """
         table_control = self.model(h.transpose(1, 2)).softmax(dim=1).transpose(1, 2)
-        return super().forward(
-            upsampled_phase, table_control, ctx(self.hop_rate), upsampled_phase_offset
+        table_control = TimeTensor(
+            table_control,
+            names=("B", "T", "D"),
+            hop_length=h.hop_length * self.hop_rate,
         )
+        return super().forward(phase, table_control, *args)
 
 
 class HarmonicOscillator(OscillatorInterface):
@@ -347,12 +370,11 @@ class HarmonicOscillator(OscillatorInterface):
 
     def forward(
         self,
-        upsampled_phase: Tensor,
-        amplitudes: Tensor,
-        ctx: TimeContext,
-        initial_phase: Optional[Tensor] = None,
-        upsampled_phase_offset: Optional[Tensor] = None,
-    ) -> Tensor:
+        phase: TimeTensor,
+        amplitudes: TimeTensor,
+        initial_phase: Optional[Union[Tensor, TimeTensor]] = None,
+        phase_offset: Optional[TimeTensor] = None,
+    ) -> TimeTensor:
         """
                    f0: B x T (Hz)
            amplitudes: B x T / hop_length x n_harmonic
@@ -363,26 +385,24 @@ class HarmonicOscillator(OscillatorInterface):
         """
 
         # harmonic synth
+        assert phase.hop_length == 1
         n_harmonic = amplitudes.shape[-1]
-        harmonics = upsampled_phase.unsqueeze(-1) * torch.arange(1, n_harmonic + 1).to(
-            upsampled_phase.device
-        )
+        harm_series = torch.arange(1, n_harmonic + 1).to(phase.device)
+        harmonics = phase.unsqueeze(-1) * harm_series
+        harmonics = harmonics.align_to("B", "T", "D").reduce_hop_length()
         alias_mask = harmonics >= 0.5
 
-        phase = torch.cumsum(harmonics, axis=1)
-        if upsampled_phase_offset is not None:
-            upsampled_phase_offset = upsampled_phase_offset % 1
-            phase = phase + upsampled_phase_offset.unsqueeze(-1) * torch.arange(
-                1, n_harmonic + 1
-            ).to(upsampled_phase.device)
+        phase = torch.cumsum(harmonics, axis="T")
+        if phase_offset is not None:
+            # upsampled_phase_offset = phase_offset.align_to("B", "T").reduce_hop_length()
+            # upsampled_phase_offset = upsampled_phase_offset % 1
+            phase = phase + phase_offset.align_to("B", "T").unsqueeze(-1) * harm_series
 
         if initial_phase is not None:
-            phase = phase + initial_phase.unsqueeze(1)
+            phase = phase + initial_phase.align_to("B", "D").unsqueeze(1)
 
-        if ctx.hop_length > 1:
-            amplitudes = linear_upsample(amplitudes.transpose(1, 2), ctx).transpose(
-                1, 2
-            )
+        amplitudes = amplitudes.reduce_hop_length().align_to("B", "T", "D")
+
         valid_length = min(amplitudes.shape[1], phase.shape[1])
         amplitudes = amplitudes[:, :valid_length]
         phase = phase[:, :valid_length]
@@ -405,36 +425,32 @@ class SawToothOscillator(HarmonicOscillator):
     def __init__(self, num_harmonics: int, gain: float = 0.4) -> None:
         super().__init__()
         self.gain = gain
-        self.register_buffer("amplicudes", 1 / torch.arange(1, num_harmonics + 1))
+        self.register_buffer("amplitudes", 1 / torch.arange(1, num_harmonics + 1))
 
     def forward(
         self,
-        upsampled_phase: Tensor,
-        initial_phase: Optional[Tensor] = None,
-        upsampled_phase_offset: Optional[Tensor] = None,
+        phase: TimeTensor,
+        initial_phase: Optional[Union[Tensor, TimeTensor]] = None,
+        phase_offset: Optional[TimeTensor] = None,
         **kwargs,
-    ) -> Tensor:
+    ) -> TimeTensor:
 
-        amplitudes = self.amplicudes[None, None, :].repeat(*upsampled_phase.shape, 1)
-        ctx = TimeContext(1)
-        return super().forward(
-            upsampled_phase, amplitudes, ctx, initial_phase, upsampled_phase_offset
-        )
+        amplitudes = self.amplitudes[None, None, :].repeat(*phase.shape, 1)
+        return super().forward(phase, amplitudes, initial_phase, phase_offset)
 
 
 class PulseTrain(OscillatorInterface):
-    def forward(
-        self, upsampled_phase: Tensor, upsampled_phase_offset: Tensor = None, **kwargs
-    ) -> Tensor:
+    def forward(self, phase: TimeTensor, phase_offset: TimeTensor) -> TimeTensor:
         # Make mask represents voiced region.
-        wrapped_phase = torch.cumsum(upsampled_phase, dim=1)
-        if upsampled_phase_offset is not None:
-            wrapped_phase = upsampled_phase_offset + wrapped_phase
-        wrapped_phase = wrapped_phase % 1
+        upsampled_phase = phase.align_to("B", "T").reduce_hop_length()
+        instant_phase = torch.cumsum(upsampled_phase, dim="T")
+        if phase_offset is not None:
+            instant_phase = instant_phase + phase_offset.align_to("B", "T")
+        wrapped_phase = instant_phase % 1
         phase_transition = (wrapped_phase[:, 1:] - wrapped_phase[:, :-1]) < 0
         out = torch.zeros_like(upsampled_phase)
         out[:, 1:][phase_transition] = upsampled_phase[:, 1:][phase_transition].rsqrt()
-        return out
+        return TimeTensor(out, names=("B", "T"))
 
 
 class AdditivePulseTrain(HarmonicOscillator):
@@ -444,19 +460,14 @@ class AdditivePulseTrain(HarmonicOscillator):
 
     def forward(
         self,
-        upsampled_phase: Tensor,
-        initial_phase: Optional[Tensor] = None,
-        upsampled_phase_offset: Optional[Tensor] = None,
+        phase: TimeTensor,
+        initial_phase: Optional[Union[Tensor, TimeTensor]] = None,
+        phase_offset: Optional[TimeTensor] = None,
         **kwargs,
-    ) -> Tensor:
+    ) -> TimeTensor:
         amplitudes = (
-            torch.ones_like(upsampled_phase)
-            .unsqueeze(-1)
-            .repeat(1, 1, self.num_harmonics)
+            torch.ones_like(phase).unsqueeze(-1).repeat(1, 1, self.num_harmonics)
         )
-        num_freq_bins = 0.5 / upsampled_phase
+        num_freq_bins = 0.5 / phase
         amplitudes = amplitudes * num_freq_bins.unsqueeze(-1).rsqrt()
-        ctx = TimeContext(1)
-        return super().forward(
-            upsampled_phase, amplitudes, ctx, initial_phase, upsampled_phase_offset
-        )
+        return super().forward(phase, amplitudes, initial_phase, phase_offset)

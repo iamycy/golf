@@ -73,6 +73,9 @@ class TimeTensor(object):
         else:
             assert self.hop_length % factor == 0 and factor <= self.hop_length
 
+        if factor == 1:
+            return self
+
         # swap the time dimension to the last
         self_copy = self._data.align_to(..., "T")
         self_copy_names = self_copy.names
@@ -83,6 +86,9 @@ class TimeTensor(object):
             .align_to(*self._data.names)
         )
         return TimeTensor(expand_self_copy, hop_length=self.hop_length // factor)
+
+    def as_tensor(self):
+        return self._data
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):

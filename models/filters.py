@@ -14,7 +14,8 @@ from .utils import (
     coeff_product,
     complex2biquads,
     params2biquads,
-    TimeContext,
+    # TimeContext,
+    TimeTensor,
     hilbert,
     linear_upsample,
     fir_filt,
@@ -40,7 +41,7 @@ class FilterInterface(nn.Module):
 
 
 class LTVFilterInterface(FilterInterface):
-    def forward(self, ex: Tensor, *args, ctx: TimeContext, **kwargs):
+    def forward(self, ex: TimeTensor, *args, **kwargs) -> TimeTensor:
         raise NotImplementedError
 
 
@@ -54,7 +55,7 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
         window = get_window_fn(window)(window_length)
         self.register_buffer("_kernel", torch.diag(window).unsqueeze(1))
 
-    def forward(self, ex: Tensor, gain: Tensor, a: Tensor, ctx: TimeContext):
+    def forward(self, ex: TimeTensor, gain: TimeTensor, a: TimeTensor):
         """
         Args:
             ex (Tensor): [B, T]
@@ -62,29 +63,27 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
             a (Tensor): [B, T / hop_length, order]
             ctx (TimeContext): TimeContext
         """
-
-        assert ex.ndim == 2
-        assert gain.ndim == 2
-        assert a.ndim == 3
+        ex = ex.align_to("B", "T")
+        gain = gain.align_to("B", "T")
+        a = a.align_to("B", "T", "D")
         assert a.shape[1] == gain.shape[1]
 
-        hop_length = ctx.hop_length
+        hop_length = gain.hop_length
 
         window_size = self._kernel.shape[0]
         assert window_size >= hop_length * 2, f"{window_size} < {hop_length * 2}"
-        padding = (window_size - hop_length) // 2
+        padding = window_size // 2
 
         # interpolate gain
-        upsampled_gain = F.interpolate(
-            gain.unsqueeze(1),
-            scale_factor=hop_length,
-            mode="linear",
-            align_corners=False,
-        ).squeeze(1)
-        ex = ex[:, : upsampled_gain.shape[1]] * upsampled_gain[:, : ex.shape[1]]
-
+        # upsampled_gain = F.interpolate(
+        #     gain.unsqueeze(1),
+        #     scale_factor=hop_length,
+        #     mode="linear",
+        #     align_corners=False,
+        # ).squeeze(1)
+        ex = ex * gain
         ex = F.pad(
-            ex,
+            ex.as_tensor().rename(None),
             (padding,) * 2,
             "constant",
             0,
@@ -96,8 +95,8 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
 
         batch, frames = gain.shape
         unfolded = unfolded.reshape(-1, window_size)
-        gain = gain.reshape(-1)
-        a = a.reshape(-1, a.shape[-1])
+        gain = gain.as_tensor().rename(None).reshape(-1)
+        a = a.as_tensor().rename(None).reshape(-1, a.shape[-1])
         filtered = lpc_synthesis(unfolded, torch.ones_like(gain), a).view(
             batch, frames, -1
         )
@@ -114,7 +113,7 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
         norm = tmp[-1]
 
         # normalize
-        return y / norm
+        return TimeTensor(y / norm, names=("B", "T"))
 
 
 class LTVMinimumPhaseFIRFilterPrecise(LTVFilterInterface):
@@ -142,28 +141,23 @@ class LTVMinimumPhaseFIRFilterPrecise(LTVFilterInterface):
         window[: kernel.shape[-1] // 2] = 1
         return kernel * window
 
-    def forward(self, ex: Tensor, log_mag: Tensor, ctx: TimeContext, **kwargs):
+    def forward(self, ex: TimeTensor, log_mag: TimeTensor):
         """
         Args:
             ex (Tensor): [B, T]
             log_mag (Tensor): [B, T / hop_length, n_fft // 2 + 1]
             ctx (TimeContext): TimeContext
         """
-        assert ex.ndim == 2
-        assert log_mag.ndim == 3
+        ex = ex.align_to("B", "T")
+        log_mag = log_mag.align_to("B", "T", "D")
 
         kernel = self.get_minimum_phase_fir(log_mag)
         kernel = self.windowing(kernel)
 
-        # upsampled_kernel = linear_upsample(
-        #     kernel.transpose(1, 2).contiguous(), ctx
-        # ).transpose(1, 2)
-        upsampled_kernel = F.upsample(
-            kernel.transpose(1, 2),
-            scale_factor=ctx.hop_length,
-            mode="linear",
-            align_corners=False,
-        ).transpose(1, 2)
+        # upsample kernel
+        upsampled_kernel = TimeTensor(
+            kernel, names=("B", "T", "D"), hop_length=log_mag.hop_length
+        ).reduce_hop_length()
 
         ex = ex[:, : upsampled_kernel.shape[1]]
         upsampled_kernel = upsampled_kernel[:, : ex.shape[1]]
@@ -180,17 +174,17 @@ class LTVMinimumPhaseFIRFilter(LTVMinimumPhaseFIRFilterPrecise):
         else:
             raise ValueError(f"Unknown conv_method: {conv_method}")
 
-    def forward(self, ex: Tensor, log_mag: Tensor, ctx: TimeContext, **kwargs):
+    def forward(self, ex: TimeTensor, log_mag: TimeTensor):
         """
         Args:
             ex (Tensor): [B, T]
             log_mag (Tensor): [B, T / hop_length, n_fft // 2 + 1]
             ctx (TimeContext): TimeContext
         """
-        assert ex.ndim == 2
-        assert log_mag.ndim == 3
+        ex = ex.align_to("B", "T")
+        log_mag = log_mag.align_to("B", "T", "D")
 
-        hop_length = ctx.hop_length
+        hop_length = log_mag.hop_length
 
         kernel = self.get_minimum_phase_fir(log_mag)
         kernel = self.windowing(kernel)
@@ -231,28 +225,25 @@ class LTVZeroPhaseFIRFilterPrecise(LTVFilterInterface):
         )
         return kernel * window
 
-    def forward(self, ex: Tensor, log_mag: Tensor, ctx: TimeContext, **kwargs):
+    def forward(self, ex: TimeTensor, log_mag: TimeTensor):
         """
         Args:
             ex (Tensor): [B, T]
             log_mag (Tensor): [B, T / hop_length, n_fft // 2 + 1]
             ctx (TimeContext): TimeContext
         """
-        assert ex.ndim == 2
-        assert log_mag.ndim == 3
+        ex = ex.align_to("B", "T")
+        log_mag = log_mag.align_to("B", "T", "D")
 
-        kernel = self.get_zero_phase_fir(log_mag)
+        kernel = self.get_zero_phase_fir(log_mag.as_tensor().rename(None))
         kernel = self.windowing(kernel)
 
         # upsampled_kernel = linear_upsample(
         #     kernel.transpose(1, 2).contiguous(), ctx
         # ).transpose(1, 2)
-        upsampled_kernel = F.upsample(
-            kernel.transpose(1, 2),
-            scale_factor=ctx.hop_length,
-            mode="linear",
-            align_corners=False,
-        ).transpose(1, 2)
+        upsampled_kernel = TimeTensor(
+            kernel, names=("B", "T", "D"), hop_length=log_mag.hop_length
+        ).reduce_hop_length()
 
         ex = ex[:, : upsampled_kernel.shape[1]]
         upsampled_kernel = upsampled_kernel[:, : ex.shape[1]]
@@ -280,27 +271,27 @@ class LTVZeroPhaseFIRFilter(LTVZeroPhaseFIRFilterPrecise):
         else:
             raise ValueError(f"Unknown conv_method: {conv_method}")
 
-    def forward(self, ex: Tensor, log_mag: Tensor, ctx: TimeContext, **kwargs):
+    def forward(self, ex: TimeTensor, log_mag: TimeTensor):
         """
         Args:
             ex (Tensor): [B, T]
             log_mag (Tensor): [B, T / hop_length, n_fft // 2 + 1]
             ctx (TimeContext): TimeContext
         """
-        assert ex.ndim == 2
-        assert log_mag.ndim == 3
+        ex = ex.align_to("B", "T")
+        log_mag = log_mag.align_to("B", "T", "D")
 
-        hop_length = ctx.hop_length
+        hop_length = log_mag.hop_length
 
-        kernel = self.get_zero_phase_fir(log_mag)
+        kernel = self.get_zero_phase_fir(log_mag.as_tensor().rename(None))
         kernel = self.windowing(kernel)
 
         padding = (kernel.shape[-1] - 1) // 2
 
         # convolve
-        unfolded = F.pad(ex, (padding, padding), "constant", 0).unfold(
-            1, kernel.shape[-1] + hop_length - 1, hop_length
-        )
+        unfolded = F.pad(
+            ex.as_tensor().rename(None), (padding, padding), "constant", 0
+        ).unfold(1, kernel.shape[-1] + hop_length - 1, hop_length)
         assert (
             unfolded.shape[1] <= kernel.shape[1]
         ), f"{unfolded.shape} != {kernel.shape}"
@@ -311,7 +302,7 @@ class LTVZeroPhaseFIRFilter(LTVZeroPhaseFIRFilterPrecise):
             kernel.reshape(-1, 1, kernel.shape[-1]),
             groups=kernel.shape[0] * kernel.shape[1],
         ).view(kernel.shape[0], -1)
-        return convolved
+        return TimeTensor(convolved, names=("B", "T"))
 
 
 class LTIRadiationFilter(FilterInterface):
@@ -394,7 +385,7 @@ class LTVMLSAFilter(LTVFilterInterface):
             **kwargs,
         )
 
-    def forward(self, ex: Tensor, mc: Tensor, ctx: TimeContext, **kwargs):
+    def forward(self, ex: Tensor, mc: Tensor, **kwargs):
         minimum_frames = ex.shape[1] // self.mlsa.frame_period
         ex = ex[:, : minimum_frames * self.mlsa.frame_period]
         mc = mc[:, :minimum_frames]

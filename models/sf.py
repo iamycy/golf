@@ -40,7 +40,15 @@ class SourceFilterSynth(nn.Module):
             assert torch.all(voicing >= 0) and torch.all(voicing <= 1)
             harm_osc = harm_osc * voicing
 
-        src = harm_osc + self.noise_filter(
+        filtered_noise = self.noise_filter(
             self.noise_generator(harm_osc, *noise_params), *noise_filt_params
+        )
+
+        minimum_length = min(harm_osc.size("T"), filtered_noise.size("T"))
+
+        src = (
+            harm_osc.truncate(minimum_length)
+            + filtered_noise.truncate(minimum_length)
+            - self.noise_filter(harm_osc, *noise_filt_params).truncate(minimum_length)
         )
         return self.end_filter(src, *end_filt_params)

@@ -26,7 +26,6 @@ def check_input_hook(m, args):
 
 
 def check_output_hook(m, args, out):
-    out = out[0]
     assert out.ndim == 2, out.shape
     assert isinstance(out, TimeTensor)
     assert out.hop_length == 1
@@ -123,10 +122,10 @@ class GlottalFlowTable(OscillatorInterface):
             hop_length: int
         """
         assert wrapped_phase.hop_length == 1
-        wrapped_phase = wrapped_phase.align_to("B", "T").as_tensor()
+        wrapped_phase = wrapped_phase.align_to("B", "T").as_tensor().rename(None)
         batch, seq_len = wrapped_phase.shape
         hop_length = tables.hop_length
-        tables = tables.align_to("B", "T", "D").as_tensor()
+        tables = tables.align_to("B", "T", "D").as_tensor().rename(None)
 
         # pad phase to have multiple of hop_length
         pad_length = (hop_length - seq_len % hop_length) % hop_length
@@ -201,7 +200,6 @@ class GlottalFlowTable(OscillatorInterface):
         )
         final_flow = selected_floor_flow * (1 - p2) + selected_ceil_flow * p2
         final_flow = final_flow.view(batch, -1)[:, :seq_len]
-
         return TimeTensor(final_flow, names=("B", "T"))
 
     def forward(
@@ -231,7 +229,9 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
             table_select_weight <= 1
         )
         num_tables, table_length = self.table.shape
-        table_index_raw = table_select_weight * (num_tables - 1)
+        table_index_raw = table_select_weight.as_tensor().rename(None) * (
+            num_tables - 1
+        )
         floor_index = table_index_raw.long().clip_(0, num_tables - 2)
         p = table_index_raw - floor_index
         p = p.unsqueeze(-1)
@@ -251,7 +251,7 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
             hop_length=table_select_weight.hop_length,
         )
         upsampled_phase = phase.align_to("B", "T").reduce_hop_length()
-        instant_phase = upsampled_phase.cumsum("T")
+        instant_phase = torch.cumsum(upsampled_phase, "T")
         if phase_offset is not None:
             instant_phase = instant_phase + phase_offset.align_to("B", "T")
         wrapped_phase = instant_phase % 1
@@ -324,7 +324,9 @@ class DownsampledIndexedGlottalFlowTable(IndexedGlottalFlowTable):
             upsampled_phase: (batch, seq_len)
             h: (batch, frames, in_channels)
         """
-        table_control = self.model(h.transpose(1, 2)).squeeze(1).sigmoid()
+        table_control = (
+            self.model(h.as_tensor().rename(None).transpose(1, 2)).squeeze(1).sigmoid()
+        )
         table_control = TimeTensor(
             table_control, names=("B", "T"), hop_length=h.hop_length * self.hop_rate
         )

@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch.nn.utils import weight_norm
 
 from .enc import BackboneModelInterface
+from .utils import TimeTensor
 
 
 class Mel2Control(BackboneModelInterface):
@@ -30,8 +31,10 @@ class Mel2Control(BackboneModelInterface):
         )
         self.norm = nn.LayerNorm(hidden_channels * 2)
 
-    def forward(self, mels: Tensor):
-        x = self.stack(mels.transpose(1, 2)).transpose(1, 2)
+    def forward(self, mels: TimeTensor):
+        x = torch.transpose(
+            self.stack(torch.transpose(mels.as_tensor().rename(None), 1, 2)), 1, 2
+        )
         x = self.decoder(x)[0]
         x = self.norm(x)
         return super().forward(x)

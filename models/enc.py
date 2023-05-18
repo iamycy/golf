@@ -4,7 +4,7 @@ import math
 from importlib import import_module
 from typing import Optional, Union, List, Tuple, Callable, Any
 
-from .utils import get_logits2biquads, biquads2lpc, TimeContext
+from .utils import get_logits2biquads, biquads2lpc, TimeTensor
 
 
 class BackboneModelInterface(nn.Module):
@@ -55,8 +55,8 @@ class VocoderParameterEncoderInterface(nn.Module):
         )
 
     def forward(
-        self, h: Tensor
-    ) -> Tuple[Tuple[Tensor, Optional[Tensor]], ...,]:
+        self, h: TimeTensor
+    ) -> Tuple[TimeTensor, ...,]:
         """
         Args:
             h: (batch_size, frames, features)
@@ -68,33 +68,40 @@ class VocoderParameterEncoderInterface(nn.Module):
         """
         f0_logits, *_ = self.backbone(h).split(self.split_size, dim=-1)
         f0 = self.logits2f0(f0_logits).squeeze(-1)
+        f0 = TimeTensor(f0, ("B", "T"), hop_length=h.hop_length)
         if self.learn_voicing:
-            _ = (_[0].squeeze(-1), *_[1:])
-        return (f0,) + tuple(_)
+            voicing = (
+                TimeTensor(_[0].squeeze(-1), ("B", "T"), hop_length=h.hop_length),
+            )
+            _ = _[1:]
+        else:
+            voicing = (None,)
+        return (
+            (f0,)
+            + tuple(TimeTensor(x, ("B", "T", "D"), hop_length=h.hop_length) for x in _)
+            + voicing
+        )
 
 
 class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
     def __init__(
         self,
-        voice_lpc_order: int,
-        noise_lpc_order: int,
         table_weight_hidden_size: int,
+        lpc_order: int,
+        noise_n_mag: int,
         *args,
         max_abs_value: float = 0.99,
-        use_snr: bool = False,
         extra_split_sizes: List[int] = [],
         kwargs: dict = {},
     ):
-        assert voice_lpc_order % 2 == 0
-        assert noise_lpc_order % 2 == 0
+        assert lpc_order % 2 == 0
 
         extra_split_sizes.extend(
             [
-                voice_lpc_order,
-                1,
-                noise_lpc_order,
-                1,
                 table_weight_hidden_size,
+                lpc_order,
+                1,
+                noise_n_mag,
             ]
         )
         super().__init__(
@@ -102,106 +109,79 @@ class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
             extra_split_sizes=extra_split_sizes,
             **kwargs,
         )
-        self.use_snr = use_snr
         self.logits2biquads = get_logits2biquads("conj", max_abs_value)
         self.backbone.out_linear.weight.data.zero_()
+        self.backbone.out_linear.bias.data.zero_()
 
         offset = 1 if self.learn_voicing else 0
+        offset += table_weight_hidden_size
         self.backbone.out_linear.bias.data[
-            offset + 1 : offset + 1 + voice_lpc_order : 2
+            offset + 1 : offset + 1 + lpc_order : 2
         ] = -10  # initialize magnitude close to zero
         self.backbone.out_linear.bias.data[
-            offset + 1 + voice_lpc_order
+            offset + 1 + lpc_order
         ] = 0  # initialize gain
-        self.backbone.out_linear.bias.data[
-            offset
-            + 1
-            + voice_lpc_order
-            + 1 : offset
-            + 1
-            + voice_lpc_order
-            + 1
-            + noise_lpc_order : 2
-        ] = -10  # initialize magnitude close to zero
-        if use_snr:
-            self.backbone.out_linear.bias.data[
-                offset + 1 + voice_lpc_order + 1 + noise_lpc_order
-            ] = 20
-        else:
-            self.backbone.out_linear.bias.data[
-                offset + 2 + voice_lpc_order + noise_lpc_order
-            ] = -10
 
     def forward(
-        self, h: Tensor
+        self, h: TimeTensor
     ) -> Tuple[
-        Tuple[Tensor, Optional[Tensor]],
+        TimeTensor,
         Tuple[Any, ...],
         Tuple[Any, ...],
         Tuple[Any, ...],
         Tuple[Any, ...],
+        Union[None, TimeTensor],
     ]:
         batch, frames, _ = h.shape
         (
-            *f0_params,
-            voice_lpc_logits,
-            voice_log_gain,
-            noise_lpc_logits,
-            noise_log_gain,
+            f0,
             h,
+            lpc_logits,
+            log_gain,
+            log_mag,
+            voicing,
         ) = super().forward(h)
-        voice_biquads = self.logits2biquads(voice_lpc_logits.view(batch, frames, -1, 2))
-        noise_biquads = self.logits2biquads(noise_lpc_logits.view(batch, frames, -1, 2))
-        voice_lpc_coeffs = biquads2lpc(voice_biquads)
-        noise_lpc_coeffs = biquads2lpc(noise_biquads)
+        voice_biquads = self.logits2biquads(
+            lpc_logits.as_tensor().rename(None).view(batch, frames, -1, 2)
+        )
+        lpc_coeffs = biquads2lpc(voice_biquads)
 
-        if self.use_snr:
-            log_snr = noise_log_gain
-            noise_log_gain = voice_log_gain - log_snr * 0.5
+        lpc_coeffs = TimeTensor(
+            lpc_coeffs, lpc_logits.names, hop_length=lpc_logits.hop_length
+        )
 
-        voice_gain = voice_log_gain.squeeze(-1).exp()
-        noise_gain = noise_log_gain.squeeze(-1).exp()
+        gain = torch.exp(torch.squeeze(log_gain, "D"))
 
         return (
-            f0_params,
+            f0,
             (h,),
-            (voice_gain, voice_lpc_coeffs),
-            (noise_gain, noise_lpc_coeffs),
             (),
+            (log_mag,),
+            (gain, lpc_coeffs),
+            voicing,
         )
 
 
 class GlottalRealCoeffLPCEncoder(GlottalComplexConjLPCEncoder):
     def __init__(
         self,
-        voice_lpc_order: int,
-        noise_lpc_order: int,
+        table_weight_hidden_size: int,
+        lpc_order: int,
+        noise_n_mag: int,
         *args,
         max_abs_value: float = 0.99,
         **kwargs,
     ):
         super().__init__(
-            voice_lpc_order,
-            noise_lpc_order,
+            table_weight_hidden_size,
+            lpc_order,
+            noise_n_mag,
             *args,
             max_abs_value=max_abs_value,
             **kwargs,
         )
         self.logits2biquads = get_logits2biquads("coef", max_abs_value)
-        offset = 1 if self.learn_voicing else 0
-        self.backbone.out_linear.bias.data[
-            offset + 1 : offset + 1 + voice_lpc_order :
-        ] = 0
-        self.backbone.out_linear.bias.data[
-            offset
-            + 1
-            + voice_lpc_order
-            + 1 : offset
-            + 1
-            + voice_lpc_order
-            + 1
-            + noise_lpc_order :
-        ] = 0
+        self.backbone.out_linear.bias.data.zero_()
 
 
 class SawSing(VocoderParameterEncoderInterface):

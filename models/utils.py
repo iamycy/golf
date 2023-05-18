@@ -21,10 +21,20 @@ class TimeTensor(object):
         if names is not None:
             self._data = self._data.refine_names(*names)
         if self._data.names is not None:
-            assert "T" in self._data.names, "TimeTensor must have a time dimension"
+            assert (
+                "T" in self._data.names
+            ), "TimeTensor must have a time dimension but got {}".format(
+                self._data.names
+            )
 
     def __repr__(self):
         return f"Hop-length: {self.hop_length}\n" + repr(self._data)
+
+    def __getitem__(self, index):
+        return TimeTensor(self._data[index], hop_length=self.hop_length)
+
+    def rename(self, *names):
+        return TimeTensor(self._data.rename(*names), hop_length=self.hop_length)
 
     @property
     def shape(self):
@@ -46,6 +56,13 @@ class TimeTensor(object):
     def size(self):
         return self._data.size
 
+    @property
+    def ndim(self):
+        return self._data.ndim
+
+    def dim(self):
+        return self._data.dim()
+
     def __add__(self, other):
         return torch.add(self, other)
 
@@ -62,7 +79,29 @@ class TimeTensor(object):
         return torch.floor_divide(self, other)
 
     def __mod__(self, other):
-        return torch.remainder(self, other)
+        return TimeTensor(
+            torch.remainder(self._data.rename(None), other),
+            names=self._data.names,
+            hop_length=self.hop_length,
+        )
+
+    def __lt__(self, other):
+        return torch.lt(self, other)
+
+    def __le__(self, other):
+        return torch.le(self, other)
+
+    def __gt__(self, other):
+        return torch.gt(self, other)
+
+    def __ge__(self, other):
+        return torch.ge(self, other)
+
+    def __eq__(self, other):
+        return torch.eq(self, other)
+
+    def __ne__(self, other):
+        return torch.ne(self, other)
 
     def align_to(self, *names: str):
         return TimeTensor(self._data.align_to(*names), hop_length=self.hop_length)
@@ -87,6 +126,17 @@ class TimeTensor(object):
         )
         return TimeTensor(expand_self_copy, hop_length=self.hop_length // factor)
 
+    @property
+    def steps(self):
+        return self._data.size("T")
+
+    def truncate(self, steps: int):
+        if steps > self.steps:
+            return self
+        dim = self._data.names.index("T")
+        data = self._data.narrow(dim, 0, steps)
+        return TimeTensor(data, hop_length=self.hop_length)
+
     def as_tensor(self):
         return self._data
 
@@ -99,9 +149,17 @@ class TimeTensor(object):
             torch.sub,
             torch.floor_divide,
             torch.remainder,
+            torch.lt,
+            torch.le,
+            torch.gt,
+            torch.ge,
+            torch.eq,
+            torch.ne,
         ):
             time_tensors = tuple(a for a in args if isinstance(a, TimeTensor))
             time_tensors = TimeTensor.broadcast_time_dim(*time_tensors)
+            min_steps = min(a.steps for a in time_tensors)
+            time_tensors = tuple(a.truncate(min_steps) for a in time_tensors)
             broadcasted_args = []
             i = 0
             for a in args:
@@ -118,9 +176,12 @@ class TimeTensor(object):
             h == hop_lengths[0] for h in hop_lengths
         ), "All TimeTensors must have the same hop length"
         args = tuple(a._data if isinstance(a, TimeTensor) else a for a in args)
-
         ret = func(*args, **kwargs)
-        return TimeTensor(ret, hop_length=hop_lengths[0])
+        if ret.ndim == 0:
+            return ret
+        if isinstance(ret, torch.Tensor):
+            return TimeTensor(ret, hop_length=hop_lengths[0])
+        return ret
 
     @classmethod
     def broadcast_time_dim(cls, *tensors):

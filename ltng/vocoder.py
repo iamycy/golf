@@ -109,10 +109,9 @@ class DDSPVocoder(pl.LightningModule):
     def forward(self, feats: torch.Tensor):
         (f0, *other_params, voicing_logits) = self.encoder(feats)
 
-        phase = (f0 / self.sample_rate,)
+        phase = f0 / self.sample_rate
         if voicing_logits is not None:
-            phase_params = phase_params + (voicing_logits.sigmoid(),)
-            voicing = voicing_logits.sigmoid()
+            voicing = torch.sigmoid(voicing_logits)
         else:
             voicing = None
 
@@ -157,11 +156,15 @@ class DDSPVocoder(pl.LightningModule):
         else:
             phase = f0_for_decoder / self.sample_rate
 
-        x_hat = self.decoder(
-            phase,
-            *other_params,
-            voicing=voicing,
-        ).as_tensor().rename(None)
+        x_hat = (
+            self.decoder(
+                phase,
+                *other_params,
+                voicing=voicing,
+            )
+            .as_tensor()
+            .rename(None)
+        )
         f0_hat = f0_hat.as_tensor().rename(None)
 
         x = x[..., : x_hat.shape[-1]]
@@ -200,6 +203,9 @@ class DDSPVocoder(pl.LightningModule):
 
         feats = self.feature_trsfm(x)
         f0_hat, x_hat, voicing = self(feats)
+        f0_hat = f0_hat.as_tensor().rename(None)
+        x_hat = x_hat.as_tensor().rename(None)
+        voicing = voicing.as_tensor().rename(None)
 
         x = x[..., : x_hat.shape[-1]]
         mask = mask[:, : x_hat.shape[1]]
@@ -220,6 +226,7 @@ class DDSPVocoder(pl.LightningModule):
             loss = loss + f0_loss * self.f0_loss_weight
 
         if voicing is not None:
+            voicing = voicing[:, :minimum_length]
             voicing_loss = F.binary_cross_entropy(voicing, f0_mask.float())
             self.log("val_voicing_loss", voicing_loss, prog_bar=False, sync_dist=True)
             if self.voicing_loss_weight > 0:

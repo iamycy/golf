@@ -6,6 +6,7 @@ from torch import nn, Tensor
 from typing import List, Dict, Tuple, Callable, Union
 from torchaudio.transforms import MelSpectrogram
 import numpy as np
+import yaml
 from frechet_audio_distance import FrechetAudioDistance
 
 from models.utils import get_window_fn
@@ -92,6 +93,8 @@ class DDSPVocoder(pl.LightningModule):
     ):
         super().__init__()
 
+        # self.save_hyperparameters()
+
         self.encoder = encoder
         self.decoder = decoder
         self.criterion = criterion
@@ -123,6 +126,15 @@ class DDSPVocoder(pl.LightningModule):
 
     def f0_loss(self, f0_hat, f0):
         return F.l1_loss(torch.log(f0_hat + 1e-3), torch.log(f0 + 1e-3))
+
+    def on_train_start(self) -> None:
+        with open("./_config.yaml", "r") as f:
+            config = yaml.safe_load(f)
+        self.logger.log_hyperparams(config)
+        self.logger.watch(self.encoder, log_freq=1000, log="all", log_graph=False)
+
+    def on_train_end(self) -> None:
+        self.logger.experiement.unwatch(self.encoder)
 
     def training_step(self, batch, batch_idx):
         x, f0_in_hz = batch
@@ -156,13 +168,11 @@ class DDSPVocoder(pl.LightningModule):
         else:
             phase = f0_for_decoder / self.sample_rate
 
-        x_hat = (
-            self.decoder(
-                phase,
-                *other_params,
-                voicing=voicing,
-            ).as_tensor()
-        )
+        x_hat = self.decoder(
+            phase,
+            *other_params,
+            voicing=voicing,
+        ).as_tensor()
         # f0_hat = f0_hat.as_tensor().rename(None)
 
         x = x[..., : x_hat.shape[-1]]
@@ -203,7 +213,6 @@ class DDSPVocoder(pl.LightningModule):
         f0_hat, x_hat, voicing = self(feats)
         f0_hat = f0_hat.as_tensor()
         x_hat = x_hat.as_tensor()
-        voicing = voicing.as_tensor()
 
         x = x[..., : x_hat.shape[-1]]
         mask = mask[:, : x_hat.shape[1]]
@@ -224,7 +233,7 @@ class DDSPVocoder(pl.LightningModule):
             loss = loss + f0_loss * self.f0_loss_weight
 
         if voicing is not None:
-            voicing = voicing[:, :minimum_length]
+            voicing = voicing.as_tensor()[:, :minimum_length]
             voicing_loss = F.binary_cross_entropy(voicing, f0_mask.float())
             self.log("val_voicing_loss", voicing_loss, prog_bar=False, sync_dist=True)
             if self.voicing_loss_weight > 0:

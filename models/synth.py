@@ -430,9 +430,11 @@ class SawToothOscillator(HarmonicOscillator):
 
 
 class PulseTrain(OscillatorInterface):
-    def forward(self, phase: AudioTensor, phase_offset: AudioTensor) -> AudioTensor:
+    def forward(
+        self, phase: AudioTensor, phase_offset: AudioTensor = None
+    ) -> AudioTensor:
         # Make mask represents voiced region.
-        upsampled_phase = phase.reduce_hop_length()
+        upsampled_phase = phase.reduce_hop_length().as_tensor()
         instant_phase = torch.cumsum(upsampled_phase, dim=1)
         if phase_offset is not None:
             instant_phase = instant_phase + phase_offset

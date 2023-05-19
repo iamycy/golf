@@ -286,14 +286,15 @@ class MLSAEnc(VocoderParameterEncoderInterface):
         Tuple[Any, ...],
         Tuple[Any, ...],
     ]:
-        *f0_params, sp_mc, ap_mc_logits = super().forward(h)
-        ap_mc = ap_mc_logits.sigmoid()
+        f0, sp_mc_logits, ap_mc_logits, voicing = super().forward(h)
 
         return (
-            f0_params,
+            f0,
             (),
-            (ap_mc,),
-            (sp_mc,),
+            (),
+            (ap_mc_logits,),
+            (sp_mc_logits,),
+            voicing,
         )
 
 

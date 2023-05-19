@@ -384,8 +384,10 @@ class LTVMLSAFilter(LTVFilterInterface):
             **kwargs,
         )
 
-    def forward(self, ex: Tensor, mc: Tensor, **kwargs):
+    def forward(self, ex: AudioTensor, mc: AudioTensor, **kwargs):
+        ex = ex.as_tensor()
+        mc = mc.as_tensor()
         minimum_frames = ex.shape[1] // self.mlsa.frame_period
         ex = ex[:, : minimum_frames * self.mlsa.frame_period]
         mc = mc[:, :minimum_frames]
-        return self.mlsa(ex, mc)
+        return AudioTensor(self.mlsa(ex, mc))

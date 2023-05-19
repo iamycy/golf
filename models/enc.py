@@ -4,7 +4,7 @@ import math
 from importlib import import_module
 from typing import Optional, Union, List, Tuple, Callable, Any
 
-from .utils import get_logits2biquads, biquads2lpc, TimeTensor
+from .utils import get_logits2biquads, biquads2lpc, AudioTensor
 
 
 class BackboneModelInterface(nn.Module):
@@ -55,8 +55,8 @@ class VocoderParameterEncoderInterface(nn.Module):
         )
 
     def forward(
-        self, h: TimeTensor
-    ) -> Tuple[TimeTensor, ...,]:
+        self, h: AudioTensor
+    ) -> Tuple[AudioTensor, ...,]:
         """
         Args:
             h: (batch_size, frames, features)
@@ -68,19 +68,13 @@ class VocoderParameterEncoderInterface(nn.Module):
         """
         f0_logits, *_ = self.backbone(h).split(self.split_size, dim=-1)
         f0 = self.logits2f0(f0_logits).squeeze(-1)
-        f0 = TimeTensor(f0, ("B", "T"), hop_length=h.hop_length)
+        f0 = h.new_tensor(f0)
         if self.learn_voicing:
-            voicing = (
-                TimeTensor(_[0].squeeze(-1), ("B", "T"), hop_length=h.hop_length),
-            )
+            voicing = f0.new_tensor(_[0].squeeze(-1))
             _ = _[1:]
         else:
-            voicing = (None,)
-        return (
-            (f0,)
-            + tuple(TimeTensor(x, ("B", "T", "D"), hop_length=h.hop_length) for x in _)
-            + voicing
-        )
+            voicing = None
+        return (f0,) + tuple(h.new_tensor(x) for x in _) + (voicing,)
 
 
 class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
@@ -123,14 +117,14 @@ class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
         ] = 0  # initialize gain
 
     def forward(
-        self, h: TimeTensor
+        self, h: AudioTensor
     ) -> Tuple[
-        TimeTensor,
+        AudioTensor,
         Tuple[Any, ...],
         Tuple[Any, ...],
         Tuple[Any, ...],
         Tuple[Any, ...],
-        Union[None, TimeTensor],
+        Union[None, AudioTensor],
     ]:
         batch, frames, _ = h.shape
         (
@@ -142,15 +136,12 @@ class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
             voicing,
         ) = super().forward(h)
         voice_biquads = self.logits2biquads(
-            lpc_logits.as_tensor().rename(None).view(batch, frames, -1, 2)
+            lpc_logits.as_tensor().view(batch, frames, -1, 2)
         )
         lpc_coeffs = biquads2lpc(voice_biquads)
+        lpc_coeffs = lpc_logits.new_tensor(lpc_coeffs)
 
-        lpc_coeffs = TimeTensor(
-            lpc_coeffs, lpc_logits.names, hop_length=lpc_logits.hop_length
-        )
-
-        gain = torch.exp(torch.squeeze(log_gain, "D"))
+        gain = torch.exp(torch.squeeze(log_gain, 2))
 
         return (
             f0,

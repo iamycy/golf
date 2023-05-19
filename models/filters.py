@@ -14,8 +14,7 @@ from .utils import (
     coeff_product,
     complex2biquads,
     params2biquads,
-    # TimeContext,
-    TimeTensor,
+    AudioTensor,
     hilbert,
     linear_upsample,
     fir_filt,
@@ -41,7 +40,7 @@ class FilterInterface(nn.Module):
 
 
 class LTVFilterInterface(FilterInterface):
-    def forward(self, ex: TimeTensor, *args, **kwargs) -> TimeTensor:
+    def forward(self, ex: AudioTensor, *args, **kwargs) -> AudioTensor:
         raise NotImplementedError
 
 
@@ -55,7 +54,7 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
         window = get_window_fn(window)(window_length)
         self.register_buffer("_kernel", torch.diag(window).unsqueeze(1))
 
-    def forward(self, ex: TimeTensor, gain: TimeTensor, a: TimeTensor):
+    def forward(self, ex: AudioTensor, gain: AudioTensor, a: AudioTensor):
         """
         Args:
             ex (Tensor): [B, T]
@@ -63,9 +62,9 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
             a (Tensor): [B, T / hop_length, order]
             ctx (TimeContext): TimeContext
         """
-        ex = ex.align_to("B", "T")
-        gain = gain.align_to("B", "T")
-        a = a.align_to("B", "T", "D")
+        # ex = ex.align_to("B", "T")
+        # gain = gain.align_to("B", "T")
+        # a = a.align_to("B", "T", "D")
         assert a.shape[1] == gain.shape[1]
 
         hop_length = gain.hop_length
@@ -83,20 +82,22 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
         # ).squeeze(1)
         ex = ex * gain
         ex = F.pad(
-            ex.as_tensor().rename(None),
+            ex,
             (padding,) * 2,
             "constant",
             0,
         )
-        unfolded = ex.unfold(1, window_size, hop_length)
+        unfolded = ex.unfold(window_size, hop_length).as_tensor()
+        a = a.as_tensor()
+        gain = gain.as_tensor()
         assert unfolded.shape[1] <= a.shape[1], f"{unfolded.shape} != {a.shape}"
         a = a[:, : unfolded.shape[1]]
         gain = gain[:, : unfolded.shape[1]]
 
         batch, frames = gain.shape
         unfolded = unfolded.reshape(-1, window_size)
-        gain = gain.as_tensor().rename(None).reshape(-1)
-        a = a.as_tensor().rename(None).reshape(-1, a.shape[-1])
+        gain = gain.reshape(-1)
+        a = a.reshape(-1, a.shape[-1])
         filtered = lpc_synthesis(unfolded, torch.ones_like(gain), a).view(
             batch, frames, -1
         )
@@ -113,7 +114,7 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
         norm = tmp[-1]
 
         # normalize
-        return TimeTensor(y / norm, names=("B", "T"))
+        return AudioTensor(y / norm)
 
 
 class LTVMinimumPhaseFIRFilterPrecise(LTVFilterInterface):
@@ -141,26 +142,24 @@ class LTVMinimumPhaseFIRFilterPrecise(LTVFilterInterface):
         window[: kernel.shape[-1] // 2] = 1
         return kernel * window
 
-    def forward(self, ex: TimeTensor, log_mag: TimeTensor):
+    def forward(self, ex: AudioTensor, log_mag: AudioTensor):
         """
         Args:
             ex (Tensor): [B, T]
             log_mag (Tensor): [B, T / hop_length, n_fft // 2 + 1]
             ctx (TimeContext): TimeContext
         """
-        ex = ex.align_to("B", "T")
-        log_mag = log_mag.align_to("B", "T", "D")
+        # ex = ex.align_to("B", "T")
+        # log_mag = log_mag.align_to("B", "T", "D")
 
         kernel = self.get_minimum_phase_fir(log_mag)
         kernel = self.windowing(kernel)
 
         # upsample kernel
-        upsampled_kernel = TimeTensor(
-            kernel, names=("B", "T", "D"), hop_length=log_mag.hop_length
-        ).reduce_hop_length()
+        upsampled_kernel = log_mag.new_tensor(kernel).reduce_hop_length()
 
-        ex = ex[:, : upsampled_kernel.shape[1]]
-        upsampled_kernel = upsampled_kernel[:, : ex.shape[1]]
+        # ex = ex[:, : upsampled_kernel.shape[1]]
+        # upsampled_kernel = upsampled_kernel[:, : ex.shape[1]]
         return fir_filt(ex, upsampled_kernel)
 
 
@@ -174,15 +173,15 @@ class LTVMinimumPhaseFIRFilter(LTVMinimumPhaseFIRFilterPrecise):
         else:
             raise ValueError(f"Unknown conv_method: {conv_method}")
 
-    def forward(self, ex: TimeTensor, log_mag: TimeTensor):
+    def forward(self, ex: AudioTensor, log_mag: AudioTensor):
         """
         Args:
             ex (Tensor): [B, T]
             log_mag (Tensor): [B, T / hop_length, n_fft // 2 + 1]
             ctx (TimeContext): TimeContext
         """
-        ex = ex.align_to("B", "T")
-        log_mag = log_mag.align_to("B", "T", "D")
+        # ex = ex.align_to("B", "T")
+        # log_mag = log_mag.align_to("B", "T", "D")
 
         hop_length = log_mag.hop_length
 
@@ -225,28 +224,26 @@ class LTVZeroPhaseFIRFilterPrecise(LTVFilterInterface):
         )
         return kernel * window
 
-    def forward(self, ex: TimeTensor, log_mag: TimeTensor):
+    def forward(self, ex: AudioTensor, log_mag: AudioTensor):
         """
         Args:
             ex (Tensor): [B, T]
             log_mag (Tensor): [B, T / hop_length, n_fft // 2 + 1]
             ctx (TimeContext): TimeContext
         """
-        ex = ex.align_to("B", "T")
-        log_mag = log_mag.align_to("B", "T", "D")
+        # ex = ex.align_to("B", "T")
+        # log_mag = log_mag.align_to("B", "T", "D")
 
-        kernel = self.get_zero_phase_fir(log_mag.as_tensor().rename(None))
+        kernel = self.get_zero_phase_fir(log_mag)
         kernel = self.windowing(kernel)
 
         # upsampled_kernel = linear_upsample(
         #     kernel.transpose(1, 2).contiguous(), ctx
         # ).transpose(1, 2)
-        upsampled_kernel = TimeTensor(
-            kernel, names=("B", "T", "D"), hop_length=log_mag.hop_length
-        ).reduce_hop_length()
+        upsampled_kernel = log_mag.as_tensor(kernel).reduce_hop_length()
 
-        ex = ex[:, : upsampled_kernel.shape[1]]
-        upsampled_kernel = upsampled_kernel[:, : ex.shape[1]]
+        # ex = ex[:, : upsampled_kernel.shape[1]]
+        # upsampled_kernel = upsampled_kernel[:, : ex.shape[1]]
 
         padding_left = (kernel.shape[-1] - 1) // 2
         padding_right = kernel.shape[-1] - 1 - padding_left
@@ -271,38 +268,40 @@ class LTVZeroPhaseFIRFilter(LTVZeroPhaseFIRFilterPrecise):
         else:
             raise ValueError(f"Unknown conv_method: {conv_method}")
 
-    def forward(self, ex: TimeTensor, log_mag: TimeTensor):
+    def forward(self, ex: AudioTensor, log_mag: AudioTensor):
         """
         Args:
             ex (Tensor): [B, T]
             log_mag (Tensor): [B, T / hop_length, n_fft // 2 + 1]
             ctx (TimeContext): TimeContext
         """
-        ex = ex.align_to("B", "T")
-        log_mag = log_mag.align_to("B", "T", "D")
+        # ex = ex.align_to("B", "T")
+        # log_mag = log_mag.align_to("B", "T", "D")
 
         hop_length = log_mag.hop_length
 
-        kernel = self.get_zero_phase_fir(log_mag.as_tensor().rename(None))
+        kernel = self.get_zero_phase_fir(log_mag)
         kernel = self.windowing(kernel)
 
         padding = (kernel.shape[-1] - 1) // 2
 
         # convolve
-        unfolded = F.pad(
-            ex.as_tensor().rename(None), (padding, padding), "constant", 0
-        ).unfold(1, kernel.shape[-1] + hop_length - 1, hop_length)
+        unfolded = (
+            F.pad(ex, (padding, padding), "constant", 0)
+            .unfold(kernel.shape[-1] + hop_length - 1, hop_length)
+            .as_tensor()
+        )
         assert (
             unfolded.shape[1] <= kernel.shape[1]
         ), f"{unfolded.shape} != {kernel.shape}"
-        kernel = kernel[:, : unfolded.shape[1]]
+        kernel = kernel.as_tensor()[:, : unfolded.shape[1]]
 
         convolved = self.convolve_fn(
             unfolded.reshape(1, -1, unfolded.shape[-1]),
             kernel.reshape(-1, 1, kernel.shape[-1]),
             groups=kernel.shape[0] * kernel.shape[1],
         ).view(kernel.shape[0], -1)
-        return TimeTensor(convolved, names=("B", "T"))
+        return AudioTensor(convolved)
 
 
 class LTIRadiationFilter(FilterInterface):

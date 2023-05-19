@@ -12,7 +12,7 @@ from models.utils import get_window_fn
 from models.hpn import HarmonicPlusNoiseSynth
 from models.sf import SourceFilterSynth
 from models.enc import VocoderParameterEncoderInterface
-from models.utils import TimeTensor, get_f0, freq2cent
+from models.utils import AudioTensor, get_f0, freq2cent
 
 
 class ScaledLogMelSpectrogram(MelSpectrogram):
@@ -24,7 +24,7 @@ class ScaledLogMelSpectrogram(MelSpectrogram):
 
     def forward(self, waveform: Tensor) -> Tensor:
         mel = super().forward(waveform).transpose(-1, -2)
-        mel = TimeTensor(mel, ("B", "T", "D"), hop_length=self.hop_length)
+        mel = AudioTensor(mel, hop_length=self.hop_length)
         log_mel = torch.log(mel + 1e-8)
         if self.training:
             self.log_mel_min.fill_(min(self.log_mel_min, torch.min(log_mel).item()))
@@ -161,11 +161,9 @@ class DDSPVocoder(pl.LightningModule):
                 phase,
                 *other_params,
                 voicing=voicing,
-            )
-            .as_tensor()
-            .rename(None)
+            ).as_tensor()
         )
-        f0_hat = f0_hat.as_tensor().rename(None)
+        # f0_hat = f0_hat.as_tensor().rename(None)
 
         x = x[..., : x_hat.shape[-1]]
         mask = mask[:, : x_hat.shape[1]]
@@ -183,7 +181,7 @@ class DDSPVocoder(pl.LightningModule):
 
         if voicing is not None:
             voicing_loss = F.binary_cross_entropy_with_logits(
-                voicing_logits.as_tensor().rename(None), low_res_mask.float()
+                voicing_logits, low_res_mask.float()
             )
             self.log("train_voicing_loss", voicing_loss, prog_bar=False, sync_dist=True)
             if self.voicing_loss_weight > 0:
@@ -203,9 +201,9 @@ class DDSPVocoder(pl.LightningModule):
 
         feats = self.feature_trsfm(x)
         f0_hat, x_hat, voicing = self(feats)
-        f0_hat = f0_hat.as_tensor().rename(None)
-        x_hat = x_hat.as_tensor().rename(None)
-        voicing = voicing.as_tensor().rename(None)
+        f0_hat = f0_hat.as_tensor()
+        x_hat = x_hat.as_tensor()
+        voicing = voicing.as_tensor()
 
         x = x[..., : x_hat.shape[-1]]
         mask = mask[:, : x_hat.shape[1]]

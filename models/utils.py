@@ -8,6 +8,232 @@ import math
 from typing import Any, Callable, Optional, Tuple, Union, List
 
 
+class AudioTensor(object):
+    def __init__(
+        self,
+        data: Union[Tensor, np.ndarray],
+        hop_length: int = 1,
+        **kwargs,
+    ):
+        self._data = torch.as_tensor(data, **kwargs)
+        self.hop_length = hop_length if self._data.ndim > 1 else 9223372036854775807
+
+    def __repr__(self):
+        return f"Hop-length: {self.hop_length}\n" + repr(self._data)
+
+    def __getitem__(self, index):
+        return AudioTensor(self._data[index], hop_length=self.hop_length)
+
+    def unfold(self, size: int, step: int = 1):
+        assert self.ndim == 2
+        return AudioTensor(
+            self._data.unfold(1, size, step), hop_length=self.hop_length * step
+        )
+
+    @property
+    def shape(self):
+        return self._data.shape
+
+    @property
+    def names(self):
+        return self._data.names
+
+    @property
+    def device(self):
+        return self._data.device
+
+    @property
+    def dtype(self):
+        return self._data.dtype
+
+    @property
+    def size(self):
+        return self._data.size
+
+    @property
+    def ndim(self):
+        return self._data.ndim
+
+    def dim(self):
+        return self._data.dim()
+
+    def __neg__(self):
+        return torch.neg(self)
+
+    def __add__(self, other):
+        return torch.add(self, other)
+
+    def __sub__(self, other):
+        return torch.sub(self, other)
+
+    def __mul__(self, other):
+        return torch.mul(self, other)
+
+    def __truediv__(self, other):
+        return torch.div(self, other)
+
+    def __floordiv__(self, other):
+        return torch.floor_divide(self, other)
+
+    def __mod__(self, other):
+        return torch.remainder(self, other)
+
+    def __radd__(self, other):
+        return torch.add(other, self)
+
+    def __rsub__(self, other):
+        return torch.sub(other, self)
+
+    def __rmul__(self, other):
+        return torch.mul(other, self)
+
+    def __rtruediv__(self, other):
+        return torch.div(other, self)
+
+    def __rfloordiv__(self, other):
+        return torch.floor_divide(other, self)
+
+    def __rmod__(self, other):
+        return torch.remainder(other, self)
+
+    def __lt__(self, other):
+        return torch.lt(self, other)
+
+    def __le__(self, other):
+        return torch.le(self, other)
+
+    def __gt__(self, other):
+        return torch.gt(self, other)
+
+    def __ge__(self, other):
+        return torch.ge(self, other)
+
+    def __eq__(self, other):
+        return torch.eq(self, other)
+
+    def __ne__(self, other):
+        return torch.ne(self, other)
+
+    def reduce_hop_length(self, factor: int = None):
+        if factor is None:
+            factor = self.hop_length
+        else:
+            assert self.hop_length % factor == 0 and factor <= self.hop_length
+
+        if factor == 1 or self.ndim < 2:
+            return self
+
+        self_copy = self._data
+        # swap the time dimension to the last
+        if self.ndim > 2:
+            self_copy = self_copy.transpose(1, -1)
+        ctx = TimeContext(factor)
+        expand_self_copy = linear_upsample(ctx, self_copy)
+
+        # swap the time dimension back
+        if self.ndim > 2:
+            expand_self_copy = expand_self_copy.transpose(1, -1)
+
+        return AudioTensor(expand_self_copy, hop_length=self.hop_length // factor)
+
+    @property
+    def steps(self):
+        if self.ndim < 2:
+            return 1
+        return self._data.size(1)
+
+    def truncate(self, steps: int):
+        if steps >= self.steps:
+            return self
+        data = self._data.narrow(1, 0, steps)
+        return AudioTensor(data, hop_length=self.hop_length)
+
+    def as_tensor(self):
+        return self._data
+
+    def new_tensor(self, data: Tensor):
+        return AudioTensor(data, hop_length=self.hop_length)
+
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        if func in (
+            torch.add,
+            torch.mul,
+            torch.div,
+            torch.sub,
+            torch.floor_divide,
+            torch.remainder,
+            torch.lt,
+            torch.le,
+            torch.gt,
+            torch.ge,
+            torch.eq,
+            torch.ne,
+        ):
+            audio_tensors = tuple(a for a in args if isinstance(a, AudioTensor))
+            audio_tensors = AudioTensor.broadcasting(*audio_tensors)
+            min_steps = min(a.steps for a in audio_tensors)
+            audio_tensors = tuple(a.truncate(min_steps) for a in audio_tensors)
+            broadcasted_args = []
+            i = 0
+            for a in args:
+                if isinstance(a, AudioTensor):
+                    broadcasted_args.append(audio_tensors[i])
+                    i += 1
+                else:
+                    broadcasted_args.append(a)
+            args = broadcasted_args
+        elif func in (torch.cat, torch.stack):
+            raise NotImplementedError(
+                "AudioTensors do not support torch.cat and torch.stack"
+            )
+        if kwargs is None:
+            kwargs = {}
+        hop_lengths = []
+        for a in args:
+            if isinstance(a, AudioTensor):
+                hop_lengths.append(a.hop_length)
+            elif isinstance(a, (tuple, list)):
+                for aa in a:
+                    if isinstance(aa, AudioTensor):
+                        hop_lengths.append(aa.hop_length)
+
+        assert len(hop_lengths) > 0 and all(
+            h == hop_lengths[0] for h in hop_lengths
+        ), "All AudioTensors must have the same hop length but got {}".format(
+            ", ".join(str(h) for h in hop_lengths)
+        )
+        args = tuple(a.as_tensor() if isinstance(a, AudioTensor) else a for a in args)
+        ret = func(*args, **kwargs)
+        if isinstance(ret, torch.Tensor) and ret.ndim != 0 and len(hop_lengths) > 0:
+            return AudioTensor(ret, hop_length=hop_lengths[0])
+        return ret
+
+    @classmethod
+    def broadcasting(cls, *tensors):
+        assert len(tensors) > 0
+        # check hop lengths are divisible by each other
+        hop_lengths = tuple(t.hop_length for t in tensors)
+        minimum_hop_length = min(hop_lengths)
+        assert all(
+            h % minimum_hop_length == 0 for h in hop_lengths
+        ), "All hop lengths must be divisible by each other"
+        ret = tuple(
+            t.reduce_hop_length(t.hop_length // minimum_hop_length)
+            if t.hop_length > minimum_hop_length
+            else t
+            for t in tensors
+        )
+        max_ndim = max(t.ndim for t in ret)
+        ret = tuple(
+            t[(slice(None),) * t.ndim + (None,) * (max_ndim - t.ndim)]
+            if t.ndim < max_ndim
+            else t
+            for t in ret
+        )
+        return ret
+
+
 class TimeTensor(object):
     def __init__(
         self,
@@ -345,8 +571,8 @@ def get_logits2biquads(
 
         def logits2coeff(logits: Tensor) -> Tensor:
             assert logits.shape[-1] == 2
-            a1 = 2 * torch.tanh(logits[..., 0]) * max_abs_pole
-            a1_abs = a1.abs()
+            a1 = torch.tanh(logits[..., 0]) * max_abs_pole * 2
+            a1_abs = torch.abs(a1)
             a2 = 0.5 * (
                 (2 - a1_abs) * torch.tanh(logits[..., 1]) * max_abs_pole + a1_abs
             )

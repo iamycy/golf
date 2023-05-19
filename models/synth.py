@@ -6,7 +6,7 @@ from typing import Optional, Union, List, Tuple, Callable
 
 from .utils import (
     get_transformed_lf,
-    TimeTensor,
+    AudioTensor,
 )
 
 
@@ -27,7 +27,7 @@ def check_input_hook(m, args):
 
 def check_output_hook(m, args, out):
     assert out.ndim == 2, out.shape
-    assert isinstance(out, TimeTensor)
+    assert isinstance(out, AudioTensor)
     assert out.hop_length == 1
 
 
@@ -44,10 +44,10 @@ class OscillatorInterface(nn.Module):
 
     def forward(
         self,
-        phase: TimeTensor,
+        phase: AudioTensor,
         *args,
         **kwargs,
-    ) -> TimeTensor:
+    ) -> AudioTensor:
         raise NotImplementedError
 
 
@@ -114,7 +114,7 @@ class GlottalFlowTable(OscillatorInterface):
         # self._table_weight_handle = self.register_forward_pre_hook(check_weight_hook)
 
     @staticmethod
-    def generate(wrapped_phase: TimeTensor, tables: TimeTensor) -> TimeTensor:
+    def generate(wrapped_phase: AudioTensor, tables: AudioTensor) -> AudioTensor:
         """
         Args:
             wrapped_phase: (batch, seq_len)
@@ -122,10 +122,10 @@ class GlottalFlowTable(OscillatorInterface):
             hop_length: int
         """
         assert wrapped_phase.hop_length == 1
-        wrapped_phase = wrapped_phase.align_to("B", "T").as_tensor().rename(None)
+        wrapped_phase = wrapped_phase.as_tensor()
         batch, seq_len = wrapped_phase.shape
         hop_length = tables.hop_length
-        tables = tables.align_to("B", "T", "D").as_tensor().rename(None)
+        tables = tables.as_tensor()
 
         # pad phase to have multiple of hop_length
         pad_length = (hop_length - seq_len % hop_length) % hop_length
@@ -200,14 +200,14 @@ class GlottalFlowTable(OscillatorInterface):
         )
         final_flow = selected_floor_flow * (1 - p2) + selected_ceil_flow * p2
         final_flow = final_flow.view(batch, -1)[:, :seq_len]
-        return TimeTensor(final_flow, names=("B", "T"))
+        return AudioTensor(final_flow)
 
     def forward(
         self,
-        phase: TimeTensor,
-        table_select_weight: TimeTensor,
+        phase: AudioTensor,
+        table_select_weight: AudioTensor,
         *args,
-    ) -> TimeTensor:
+    ) -> AudioTensor:
         """
         input:
             upsampled_phase: (batch, seq_len)
@@ -220,21 +220,19 @@ class GlottalFlowTable(OscillatorInterface):
 class IndexedGlottalFlowTable(GlottalFlowTable):
     def forward(
         self,
-        phase: TimeTensor,
-        table_select_weight: TimeTensor,
-        phase_offset: TimeTensor = None,
+        phase: AudioTensor,
+        table_select_weight: AudioTensor,
+        phase_offset: AudioTensor = None,
     ) -> Tensor:
         assert table_select_weight.dim() == 2
         assert torch.all(table_select_weight >= 0) and torch.all(
             table_select_weight <= 1
         )
         num_tables, table_length = self.table.shape
-        table_index_raw = table_select_weight.as_tensor().rename(None) * (
-            num_tables - 1
-        )
-        floor_index = table_index_raw.long().clip_(0, num_tables - 2)
+        table_index_raw = table_select_weight * (num_tables - 1)
+        floor_index = table_index_raw.as_tensor().long().clip_(0, num_tables - 2)
         p = table_index_raw - floor_index
-        p = p.unsqueeze(-1)
+        p = torch.unsqueeze(p, -1)
         interp_tables = (
             self.table[floor_index.flatten()].view(
                 floor_index.shape[0], floor_index.shape[1], table_length
@@ -245,15 +243,11 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
             )
             * p
         )
-        interp_tables = TimeTensor(
-            interp_tables,
-            names=("B", "T", "D"),
-            hop_length=table_select_weight.hop_length,
-        )
-        upsampled_phase = phase.align_to("B", "T").reduce_hop_length()
-        instant_phase = torch.cumsum(upsampled_phase, "T")
+        # interp_tables = table_select_weight.new_tensor(interp_tables)
+        upsampled_phase = phase.reduce_hop_length()
+        instant_phase = torch.cumsum(upsampled_phase, 1)
         if phase_offset is not None:
-            instant_phase = instant_phase + phase_offset.align_to("B", "T")
+            instant_phase = instant_phase + phase_offset
         wrapped_phase = instant_phase % 1
         return self.generate(wrapped_phase, interp_tables)
 
@@ -261,9 +255,9 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
 class WeightedGlottalFlowTable(GlottalFlowTable):
     def forward(
         self,
-        phase: TimeTensor,
-        table_select_weight: TimeTensor,
-        phase_offset: TimeTensor = None,
+        phase: AudioTensor,
+        table_select_weight: AudioTensor,
+        phase_offset: AudioTensor = None,
     ) -> Tensor:
         assert table_select_weight.dim() == 3
         assert table_select_weight.shape[2] == self.table.shape[0]
@@ -271,9 +265,9 @@ class WeightedGlottalFlowTable(GlottalFlowTable):
             table_select_weight <= 1
         )
         weighted_tables = table_select_weight @ self.table
-        instant_phase = phase.align_to("B", "T").reduce_hop_length().cumsum("T")
+        instant_phase = torch.cumsum(phase.reduce_hop_length(), 1)
         if phase_offset is not None:
-            instant_phase = instant_phase + phase_offset.align_to("B", "T")
+            instant_phase = instant_phase + phase_offset
         wrapped_phase = instant_phase % 1
         return self.generate(wrapped_phase, weighted_tables)
 
@@ -315,20 +309,20 @@ class DownsampledIndexedGlottalFlowTable(IndexedGlottalFlowTable):
 
     def forward(
         self,
-        phase: TimeTensor,
-        h: TimeTensor,
+        phase: AudioTensor,
+        h: AudioTensor,
         *args,
-    ) -> TimeTensor:
+    ) -> AudioTensor:
         """
         input:
             upsampled_phase: (batch, seq_len)
             h: (batch, frames, in_channels)
         """
         table_control = (
-            self.model(h.as_tensor().rename(None).transpose(1, 2)).squeeze(1).sigmoid()
+            self.model(torch.transpose(h.as_tensor(), 1, 2)).squeeze(1).sigmoid()
         )
-        table_control = TimeTensor(
-            table_control, names=("B", "T"), hop_length=h.hop_length * self.hop_rate
+        table_control = AudioTensor(
+            table_control, hop_length=h.hop_length * self.hop_rate
         )
         return super().forward(phase, table_control, *args)
 
@@ -349,19 +343,18 @@ class DownsampledWeightedGlottalFlowTable(WeightedGlottalFlowTable):
 
     def forward(
         self,
-        phase: TimeTensor,
-        h: TimeTensor,
+        phase: AudioTensor,
+        h: AudioTensor,
         *args,
-    ) -> TimeTensor:
+    ) -> AudioTensor:
         """
         input:
             upsampled_phase: (batch, seq_len)
             h: (batch, frames, in_channels)
         """
         table_control = self.model(h.transpose(1, 2)).softmax(dim=1).transpose(1, 2)
-        table_control = TimeTensor(
+        table_control = AudioTensor(
             table_control,
-            names=("B", "T", "D"),
             hop_length=h.hop_length * self.hop_rate,
         )
         return super().forward(phase, table_control, *args)
@@ -372,11 +365,11 @@ class HarmonicOscillator(OscillatorInterface):
 
     def forward(
         self,
-        phase: TimeTensor,
-        amplitudes: TimeTensor,
-        initial_phase: Optional[Union[Tensor, TimeTensor]] = None,
-        phase_offset: Optional[TimeTensor] = None,
-    ) -> TimeTensor:
+        phase: AudioTensor,
+        amplitudes: AudioTensor,
+        initial_phase: Optional[Union[Tensor, AudioTensor]] = None,
+        phase_offset: Optional[AudioTensor] = None,
+    ) -> AudioTensor:
         """
                    f0: B x T (Hz)
            amplitudes: B x T / hop_length x n_harmonic
@@ -391,24 +384,19 @@ class HarmonicOscillator(OscillatorInterface):
         n_harmonic = amplitudes.shape[-1]
         harm_series = torch.arange(1, n_harmonic + 1).to(phase.device)
         harmonics = phase.unsqueeze(-1) * harm_series
-        harmonics = harmonics.align_to("B", "T", "D").reduce_hop_length()
+        harmonics = harmonics.reduce_hop_length()
         alias_mask = harmonics >= 0.5
 
-        phase = torch.cumsum(harmonics, axis="T")
+        phase = torch.cumsum(harmonics, axis=1)
         if phase_offset is not None:
             # upsampled_phase_offset = phase_offset.align_to("B", "T").reduce_hop_length()
             # upsampled_phase_offset = upsampled_phase_offset % 1
-            phase = phase + phase_offset.align_to("B", "T").unsqueeze(-1) * harm_series
+            phase = phase + phase_offset.unsqueeze(-1) * harm_series
 
         if initial_phase is not None:
-            phase = phase + initial_phase.align_to("B", "D").unsqueeze(1)
+            phase = phase + initial_phase.unsqueeze(1)
 
-        amplitudes = amplitudes.reduce_hop_length().align_to("B", "T", "D")
-
-        valid_length = min(amplitudes.shape[1], phase.shape[1])
-        amplitudes = amplitudes[:, :valid_length]
-        phase = phase[:, :valid_length]
-        alias_mask = alias_mask[:, :valid_length]
+        amplitudes = amplitudes.reduce_hop_length()
 
         # anti-aliasing
         amplitudes = torch.where(alias_mask, 0, amplitudes)
@@ -431,28 +419,28 @@ class SawToothOscillator(HarmonicOscillator):
 
     def forward(
         self,
-        phase: TimeTensor,
-        initial_phase: Optional[Union[Tensor, TimeTensor]] = None,
-        phase_offset: Optional[TimeTensor] = None,
+        phase: AudioTensor,
+        initial_phase: Optional[Union[Tensor, AudioTensor]] = None,
+        phase_offset: Optional[AudioTensor] = None,
         **kwargs,
-    ) -> TimeTensor:
+    ) -> AudioTensor:
 
         amplitudes = self.amplitudes[None, None, :].repeat(*phase.shape, 1)
         return super().forward(phase, amplitudes, initial_phase, phase_offset)
 
 
 class PulseTrain(OscillatorInterface):
-    def forward(self, phase: TimeTensor, phase_offset: TimeTensor) -> TimeTensor:
+    def forward(self, phase: AudioTensor, phase_offset: AudioTensor) -> AudioTensor:
         # Make mask represents voiced region.
-        upsampled_phase = phase.align_to("B", "T").reduce_hop_length()
-        instant_phase = torch.cumsum(upsampled_phase, dim="T")
+        upsampled_phase = phase.reduce_hop_length()
+        instant_phase = torch.cumsum(upsampled_phase, dim=1)
         if phase_offset is not None:
-            instant_phase = instant_phase + phase_offset.align_to("B", "T")
+            instant_phase = instant_phase + phase_offset
         wrapped_phase = instant_phase % 1
         phase_transition = (wrapped_phase[:, 1:] - wrapped_phase[:, :-1]) < 0
         out = torch.zeros_like(upsampled_phase)
         out[:, 1:][phase_transition] = upsampled_phase[:, 1:][phase_transition].rsqrt()
-        return TimeTensor(out, names=("B", "T"))
+        return AudioTensor(out)
 
 
 class AdditivePulseTrain(HarmonicOscillator):
@@ -462,11 +450,11 @@ class AdditivePulseTrain(HarmonicOscillator):
 
     def forward(
         self,
-        phase: TimeTensor,
-        initial_phase: Optional[Union[Tensor, TimeTensor]] = None,
-        phase_offset: Optional[TimeTensor] = None,
+        phase: AudioTensor,
+        initial_phase: Optional[Union[Tensor, AudioTensor]] = None,
+        phase_offset: Optional[AudioTensor] = None,
         **kwargs,
-    ) -> TimeTensor:
+    ) -> AudioTensor:
         amplitudes = (
             torch.ones_like(phase).unsqueeze(-1).repeat(1, 1, self.num_harmonics)
         )

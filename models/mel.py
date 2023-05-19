@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.nn.utils import weight_norm
 
 from .enc import BackboneModelInterface
-from .utils import TimeTensor
+from .utils import AudioTensor
 
 
 class Mel2Control(BackboneModelInterface):
@@ -31,9 +31,9 @@ class Mel2Control(BackboneModelInterface):
         )
         self.norm = nn.LayerNorm(hidden_channels * 2)
 
-    def forward(self, mels: TimeTensor):
+    def forward(self, mels: AudioTensor):
         x = torch.transpose(
-            self.stack(torch.transpose(mels.as_tensor().rename(None), 1, 2)), 1, 2
+            self.stack(torch.transpose(mels, 1, 2)), 1, 2
         )
         x = self.decoder(x)[0]
         x = self.norm(x)

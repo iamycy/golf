@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 from .synth import OscillatorInterface
 from .filters import LTVFilterInterface
 from .noise import NoiseInterface
-from .utils import TimeTensor
+from .utils import AudioTensor
 
 
 class SourceFilterSynth(nn.Module):
@@ -26,13 +26,13 @@ class SourceFilterSynth(nn.Module):
 
     def forward(
         self,
-        phase: TimeTensor,
-        harm_osc_params: Tuple[TimeTensor, ...],
-        noise_params: Tuple[TimeTensor, ...],
-        noise_filt_params: Tuple[TimeTensor, ...],
-        end_filt_params: Tuple[TimeTensor, ...],
-        voicing: Optional[TimeTensor] = None,
-    ) -> TimeTensor:
+        phase: AudioTensor,
+        harm_osc_params: Tuple[AudioTensor, ...],
+        noise_params: Tuple[AudioTensor, ...],
+        noise_filt_params: Tuple[AudioTensor, ...],
+        end_filt_params: Tuple[AudioTensor, ...],
+        voicing: Optional[AudioTensor] = None,
+    ) -> AudioTensor:
 
         # Time-varying components
         harm_osc = self.harm_oscillator(phase, *harm_osc_params)
@@ -44,11 +44,9 @@ class SourceFilterSynth(nn.Module):
             self.noise_generator(harm_osc, *noise_params), *noise_filt_params
         )
 
-        minimum_length = min(harm_osc.size("T"), filtered_noise.size("T"))
+        # minimum_length = min(harm_osc.size(1), filtered_noise.size(1))
 
         src = (
-            harm_osc.truncate(minimum_length)
-            + filtered_noise.truncate(minimum_length)
-            - self.noise_filter(harm_osc, *noise_filt_params).truncate(minimum_length)
+            harm_osc + filtered_noise - self.noise_filter(harm_osc, *noise_filt_params)
         )
         return self.end_filter(src, *end_filt_params)

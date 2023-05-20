@@ -467,15 +467,14 @@ def freq2cent(f0):
 def rc2lpc(rc: Tensor) -> Tensor:
     assert rc.ndim == 3
     k_0 = rc[..., :1]
-    current_lpc = [k_0]
     order = rc.shape[-1]
+    current_lpc = torch.cat([torch.ones_like(k_0), k_0], dim=-1)
 
     for n in range(1, order):
-        prev_lpc = torch.cat(current_lpc, dim=-1)
+        prev_lpc = torch.cat([current_lpc, torch.zeros_like(k_0)], dim=-1)
         k_n = rc[..., n : n + 1]
-        current_lpc = prev_lpc + k_n * prev_lpc[..., list(range(n - 1, -1, -1))]
-        current_lpc = [current_lpc, k_n]
-    return torch.cat([torch.ones_like(k_0)] + current_lpc, dim=-1)
+        current_lpc = prev_lpc + k_n * prev_lpc.flip(-1)
+    return current_lpc
 
 
 get_f0 = partial(

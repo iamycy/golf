@@ -1,5 +1,5 @@
-import pytorch_lightning as pl
-from pytorch_lightning.cli import LightningCLI, LightningArgumentParser
+import lightning.pytorch as pl
+from lightning.pytorch.cli import LightningCLI, LightningArgumentParser
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
@@ -128,13 +128,10 @@ class DDSPVocoder(pl.LightningModule):
         return F.l1_loss(torch.log(f0_hat + 1e-3), torch.log(f0 + 1e-3))
 
     def on_train_start(self) -> None:
-        with open("./_config.yaml", "r") as f:
-            config = yaml.safe_load(f)
-        self.logger.log_hyperparams(config)
         self.logger.watch(self.encoder, log_freq=1000, log="all", log_graph=False)
 
     def on_train_end(self) -> None:
-        self.logger.experiement.unwatch(self.encoder)
+        self.logger.experiment.unwatch(self.encoder)
 
     def training_step(self, batch, batch_idx):
         x, f0_in_hz = batch
@@ -281,6 +278,7 @@ class DDSPVocoder(pl.LightningModule):
 
         feats = self.feature_trsfm(x)
         _, x_hat, _ = self(feats)
+        x_hat = x_hat.as_tensor()
 
         x = x[..., : x_hat.shape[-1]]
         mss_loss = self.criterion(x_hat, x).item()

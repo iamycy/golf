@@ -1,5 +1,5 @@
 from torch.utils.data import DataLoader
-from pytorch_lightning import LightningDataModule
+from lightning.pytorch import LightningDataModule
 
 from datasets.mir1k import MIR1KDataset
 from datasets.mpop600 import MPop600Dataset

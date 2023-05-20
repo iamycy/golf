@@ -234,199 +234,6 @@ class AudioTensor(object):
         return ret
 
 
-class TimeTensor(object):
-    def __init__(
-        self,
-        data: Union[Tensor, np.ndarray],
-        names: Tuple[str, ...] = None,
-        hop_length: int = 1,
-        **kwargs,
-    ):
-        self.hop_length = hop_length
-        self._data = torch.as_tensor(data, **kwargs)
-        if names is not None:
-            self._data = self._data.refine_names(*names)
-        if self._data.names is not None:
-            assert (
-                "T" in self._data.names
-            ), "TimeTensor must have a time dimension but got {}".format(
-                self._data.names
-            )
-
-    def __repr__(self):
-        return f"Hop-length: {self.hop_length}\n" + repr(self._data)
-
-    def __getitem__(self, index):
-        return TimeTensor(self._data[index], hop_length=self.hop_length)
-
-    def rename(self, *names):
-        return TimeTensor(self._data.rename(*names), hop_length=self.hop_length)
-
-    @property
-    def shape(self):
-        return self._data.shape
-
-    @property
-    def names(self):
-        return self._data.names
-
-    @property
-    def device(self):
-        return self._data.device
-
-    @property
-    def dtype(self):
-        return self._data.dtype
-
-    @property
-    def size(self):
-        return self._data.size
-
-    @property
-    def ndim(self):
-        return self._data.ndim
-
-    def dim(self):
-        return self._data.dim()
-
-    def __add__(self, other):
-        return torch.add(self, other)
-
-    def __sub__(self, other):
-        return torch.sub(self, other)
-
-    def __mul__(self, other):
-        return torch.mul(self, other)
-
-    def __truediv__(self, other):
-        return torch.div(self, other)
-
-    def __floordiv__(self, other):
-        return torch.floor_divide(self, other)
-
-    def __mod__(self, other):
-        return TimeTensor(
-            torch.remainder(self._data.rename(None), other),
-            names=self._data.names,
-            hop_length=self.hop_length,
-        )
-
-    def __lt__(self, other):
-        return torch.lt(self, other)
-
-    def __le__(self, other):
-        return torch.le(self, other)
-
-    def __gt__(self, other):
-        return torch.gt(self, other)
-
-    def __ge__(self, other):
-        return torch.ge(self, other)
-
-    def __eq__(self, other):
-        return torch.eq(self, other)
-
-    def __ne__(self, other):
-        return torch.ne(self, other)
-
-    def align_to(self, *names: str):
-        return TimeTensor(self._data.align_to(*names), hop_length=self.hop_length)
-
-    def reduce_hop_length(self, factor: int = None):
-        if factor is None:
-            factor = self.hop_length
-        else:
-            assert self.hop_length % factor == 0 and factor <= self.hop_length
-
-        if factor == 1:
-            return self
-
-        # swap the time dimension to the last
-        self_copy = self._data.align_to(..., "T")
-        self_copy_names = self_copy.names
-        ctx = TimeContext(factor)
-        expand_self_copy = (
-            linear_upsample(ctx, self_copy.rename(None))
-            .rename(*self_copy_names)
-            .align_to(*self._data.names)
-        )
-        return TimeTensor(expand_self_copy, hop_length=self.hop_length // factor)
-
-    @property
-    def steps(self):
-        return self._data.size("T")
-
-    def truncate(self, steps: int):
-        if steps > self.steps:
-            return self
-        dim = self._data.names.index("T")
-        data = self._data.narrow(dim, 0, steps)
-        return TimeTensor(data, hop_length=self.hop_length)
-
-    def as_tensor(self):
-        return self._data
-
-    @classmethod
-    def __torch_function__(cls, func, types, args=(), kwargs=None):
-        if func in (
-            torch.add,
-            torch.mul,
-            torch.div,
-            torch.sub,
-            torch.floor_divide,
-            torch.remainder,
-            torch.lt,
-            torch.le,
-            torch.gt,
-            torch.ge,
-            torch.eq,
-            torch.ne,
-        ):
-            time_tensors = tuple(a for a in args if isinstance(a, TimeTensor))
-            time_tensors = TimeTensor.broadcast_time_dim(*time_tensors)
-            min_steps = min(a.steps for a in time_tensors)
-            time_tensors = tuple(a.truncate(min_steps) for a in time_tensors)
-            broadcasted_args = []
-            i = 0
-            for a in args:
-                if isinstance(a, TimeTensor):
-                    broadcasted_args.append(time_tensors[i])
-                    i += 1
-                else:
-                    broadcasted_args.append(a)
-            args = broadcasted_args
-        if kwargs is None:
-            kwargs = {}
-        hop_lengths = tuple(a.hop_length for a in args if isinstance(a, TimeTensor))
-        assert len(hop_lengths) > 0 and all(
-            h == hop_lengths[0] for h in hop_lengths
-        ), "All TimeTensors must have the same hop length"
-        args = tuple(a._data if isinstance(a, TimeTensor) else a for a in args)
-        ret = func(*args, **kwargs)
-        if ret.ndim == 0:
-            return ret
-        if isinstance(ret, torch.Tensor):
-            return TimeTensor(ret, hop_length=hop_lengths[0])
-        return ret
-
-    @classmethod
-    def broadcast_time_dim(cls, *tensors):
-        assert len(tensors) > 0
-        # check hop lengths are divisible by each other
-        hop_lengths = tuple(t.hop_length for t in tensors)
-        minimum_hop_length = min(hop_lengths)
-        assert all(
-            h % minimum_hop_length == 0 for h in hop_lengths
-        ), "All hop lengths must be divisible by each other"
-        ret = tuple(
-            t.reduce_hop_length(t.hop_length // minimum_hop_length)
-            if t.hop_length > minimum_hop_length
-            else t
-            for t in tensors
-        )
-        return ret
-
-
 def get_transformed_lf(
     R_d: float = 0.3,
     T_0: float = 5.0,
@@ -655,6 +462,20 @@ def hilbert(x: Tensor, dim: int = -1) -> Tensor:
 
 def freq2cent(f0):
     return 1200 * np.log2(f0 / 440)
+
+
+def rc2lpc(rc: Tensor) -> Tensor:
+    assert rc.ndim == 3
+    k_0 = rc[..., :1]
+    current_lpc = [k_0]
+    order = rc.shape[-1]
+
+    for n in range(1, order):
+        prev_lpc = torch.cat(current_lpc, dim=-1)
+        k_n = rc[..., n : n + 1]
+        current_lpc = prev_lpc + k_n * prev_lpc[..., list(range(n - 1, -1, -1))]
+        current_lpc = [current_lpc, k_n]
+    return torch.cat([torch.ones_like(k_0)] + current_lpc, dim=-1)
 
 
 get_f0 = partial(

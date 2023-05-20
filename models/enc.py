@@ -4,7 +4,7 @@ import math
 from importlib import import_module
 from typing import Optional, Union, List, Tuple, Callable, Any
 
-from .utils import get_logits2biquads, biquads2lpc, AudioTensor
+from .utils import get_logits2biquads, biquads2lpc, AudioTensor, rc2lpc
 
 
 class BackboneModelInterface(nn.Module):
@@ -48,6 +48,7 @@ class VocoderParameterEncoderInterface(nn.Module):
         self.backbone = getattr(module, class_name)(
             out_channels=sum(self.split_size), **kwargs
         )
+        # self.backbone = torch.compile(self.backbone)
 
     def logits2f0(self, logits: Tensor) -> Tensor:
         return torch.exp(
@@ -66,7 +67,7 @@ class VocoderParameterEncoderInterface(nn.Module):
             noise_filt_params: Tuple[Tensor, ...]
             noise_params: Tuple[Tensor, ...]
         """
-        f0_logits, *_ = self.backbone(h).split(self.split_size, dim=-1)
+        f0_logits, *_ = self.backbone(h.as_tensor()).split(self.split_size, dim=-1)
         f0 = self.logits2f0(f0_logits).squeeze(-1)
         f0 = h.new_tensor(f0)
         if self.learn_voicing:
@@ -173,6 +174,69 @@ class GlottalRealCoeffLPCEncoder(GlottalComplexConjLPCEncoder):
         )
         self.logits2biquads = get_logits2biquads("coef", max_abs_value)
         self.backbone.out_linear.bias.data.zero_()
+
+
+class GlottalRC2LPCEncoder(VocoderParameterEncoderInterface):
+    def __init__(
+        self,
+        table_weight_hidden_size: int,
+        lpc_order: int,
+        noise_n_mag: int,
+        *args,
+        max_abs_value: float = 0.99,
+        extra_split_sizes: List[int] = [],
+        kwargs: dict = {},
+    ):
+
+        extra_split_sizes.extend(
+            [
+                table_weight_hidden_size,
+                lpc_order,
+                1,
+                noise_n_mag,
+            ]
+        )
+        super().__init__(
+            *args,
+            extra_split_sizes=extra_split_sizes,
+            **kwargs,
+        )
+        self.backbone.out_linear.weight.data.zero_()
+        self.backbone.out_linear.bias.data.zero_()
+        self.max_abs_value = max_abs_value
+
+    def forward(
+        self, h: AudioTensor
+    ) -> Tuple[
+        AudioTensor,
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Tuple[Any, ...],
+        Union[None, AudioTensor],
+    ]:
+        (
+            f0,
+            h,
+            lpc_logits,
+            log_gain,
+            log_mag,
+            voicing,
+        ) = super().forward(h)
+
+        lpc_coeffs = h.new_tensor(
+            rc2lpc(lpc_logits.as_tensor().tanh() * self.max_abs_value)
+        )
+        gain = torch.exp(torch.squeeze(log_gain, 2))
+
+        return (
+            f0,
+            (h,),
+            (),
+            (log_mag,),
+            (gain, lpc_coeffs),
+            voicing,
+        )
 
 
 class SawSing(VocoderParameterEncoderInterface):
@@ -286,14 +350,15 @@ class MLSAEnc(VocoderParameterEncoderInterface):
         Tuple[Any, ...],
         Tuple[Any, ...],
     ]:
-        f0, sp_mc_logits, ap_mc_logits, voicing = super().forward(h)
+        f0, sp_mc, ap_mc_logits, voicing = super().forward(h)
+        ap_mc = torch.sigmoid(ap_mc_logits)
 
         return (
             f0,
             (),
             (),
-            (ap_mc_logits,),
-            (sp_mc_logits,),
+            (ap_mc,),
+            (sp_mc,),
             voicing,
         )
 

@@ -1,6 +1,7 @@
 import torch
 from torch import nn, Tensor
 from typing import Optional, Union, List, Tuple, Callable
+import math
 
 
 __all__ = [
@@ -31,10 +32,10 @@ class StandardNormalNoise(NoiseInterface):
 
 class UniformNoise(NoiseInterface):
     def __init__(self):
-        super().__init__(torch.distributions.Uniform(-1, 1))
+        super().__init__(torch.distributions.Uniform(-math.sqrt(3), math.sqrt(3)))
 
     def forward(self, ref: Tensor, *args, **kwargs) -> Tensor:
-        return torch.rand_like(ref) * 2 - 1
+        return (torch.rand_like(ref) - 0.5) * 2 * math.sqrt(3)
 
 
 class SignFlipNoise(NoiseInterface):

@@ -63,7 +63,8 @@ class MyConfigCallback(Callback):
                 multifile=self.multifile,
             )
             self.already_saved = True
-            trainer.logger.log_hyperparams(self.config.as_dict())
+            if trainer.logger is not None:
+                trainer.logger.log_hyperparams(self.config.as_dict())
 
         # broadcast so that all ranks are in sync on future calls to .setup()
         self.already_saved = trainer.strategy.broadcast(self.already_saved)

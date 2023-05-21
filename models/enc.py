@@ -15,6 +15,8 @@ class BackboneModelInterface(nn.Module):
     def __init__(self, linear_in_channels: int, linear_out_channels: int):
         super().__init__()
         self.out_linear = nn.Linear(linear_in_channels, linear_out_channels)
+        self.out_linear.weight.data.zero_()
+        self.out_linear.bias.data.zero_()
 
     def forward(self, x: Tensor) -> Tensor:
         return self.out_linear(x)
@@ -50,7 +52,8 @@ class VocoderParameterEncoderInterface(nn.Module):
 
     def logits2f0(self, logits: AudioTensor) -> AudioTensor:
         return torch.exp(
-            torch.sigmoid(logits) * (self.log_f0_max - self.log_f0_min) + self.log_f0_min
+            torch.sigmoid(logits) * (self.log_f0_max - self.log_f0_min)
+            + self.log_f0_min
         )
 
     def forward(

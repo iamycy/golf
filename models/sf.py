@@ -6,6 +6,7 @@ from .synth import OscillatorInterface
 from .filters import LTVFilterInterface
 from .noise import NoiseInterface
 from .utils import AudioTensor
+from .ctrl import SPLIT_TRSFM_SIGNATURE, DUMMY_SPLIT_TRSFM
 
 
 class SourceFilterSynth(nn.Module):
@@ -48,3 +49,15 @@ class SourceFilterSynth(nn.Module):
             - self.noise_filter(harm_osc, *noise_filt_params)
         )
         return self.end_filter(src, *end_filt_params)
+
+    def get_split_sizes_and_trsfms(self):
+        ctrl_fns = [
+            self.harm_oscillator.ctrl,
+            self.noise_generator.ctrl,
+            self.noise_filter.ctrl,
+            self.end_filter.ctrl,
+        ]
+        split_trsfm = DUMMY_SPLIT_TRSFM
+        for ctrl_fn in ctrl_fns[::-1]:
+            split_trsfm = ctrl_fn(split_trsfm)
+        return split_trsfm((), ())

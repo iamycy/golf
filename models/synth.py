@@ -8,6 +8,7 @@ from .utils import (
     get_transformed_lf,
     AudioTensor,
 )
+from .ctrl import Controllable, SPLIT_TRSFM_SIGNATURE, TRSFM_TYPE
 
 
 __all__ = [
@@ -36,7 +37,7 @@ def check_weight_hook(m, args):
     assert torch.all(weight >= 0) and torch.all(weight <= 1)
 
 
-class OscillatorInterface(nn.Module):
+class OscillatorInterface(Controllable):
     def __init__(self) -> None:
         super().__init__()
         self._input_handle = self.register_forward_pre_hook(check_input_hook)
@@ -218,6 +219,22 @@ class GlottalFlowTable(OscillatorInterface):
 
 
 class IndexedGlottalFlowTable(GlottalFlowTable):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
+            def split_and_trsfm(
+                split_sizes: Tuple[Tuple[int, ...], ...],
+                trsfm_fns: Tuple[TRSFM_TYPE, ...],
+            ):
+                split_sizes = split_sizes + ((1,),)
+                trsfm_fns = trsfm_fns + (lambda x: (torch.sigmoid(x),),)
+                return other_split_trsfm(split_sizes, trsfm_fns)
+
+            return split_and_trsfm
+
+        self.ctrl = ctrl_fn
+
     def forward(
         self,
         phase: AudioTensor,
@@ -253,6 +270,22 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
 
 
 class WeightedGlottalFlowTable(GlottalFlowTable):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
+            def split_and_trsfm(
+                split_sizes: Tuple[Tuple[int, ...], ...],
+                trsfm_fns: Tuple[TRSFM_TYPE, ...],
+            ):
+                split_sizes = split_sizes + ((self.table.shape[0],),)
+                trsfm_fns = trsfm_fns + (lambda x: (torch.softmax(x, 2),),)
+                return other_split_trsfm(split_sizes, trsfm_fns)
+
+            return split_and_trsfm
+
+        self.ctrl = ctrl_fn
+
     def forward(
         self,
         phase: AudioTensor,
@@ -294,8 +327,6 @@ def get_downsampler(hop_rate: int, in_channels: int, output_channels: int):
 
 
 class DownsampledIndexedGlottalFlowTable(IndexedGlottalFlowTable):
-    hop_rate: int
-
     def __init__(
         self,
         hop_rate: int,
@@ -307,29 +338,49 @@ class DownsampledIndexedGlottalFlowTable(IndexedGlottalFlowTable):
         self.hop_rate = hop_rate
         self.model = get_downsampler(hop_rate, in_channels, 1)
 
-    def forward(
-        self,
-        phase: AudioTensor,
-        h: AudioTensor,
-        *args,
-    ) -> AudioTensor:
-        """
-        input:
-            upsampled_phase: (batch, seq_len)
-            h: (batch, frames, in_channels)
-        """
-        table_control = (
-            self.model(torch.transpose(h.as_tensor(), 1, 2)).squeeze(1).sigmoid()
-        )
-        table_control = AudioTensor(
-            table_control, hop_length=h.hop_length * self.hop_rate
-        )
-        return super().forward(phase, table_control, *args)
+        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
+            def split_and_trsfm(
+                split_sizes: Tuple[Tuple[int, ...], ...],
+                trsfm_fns: Tuple[TRSFM_TYPE, ...],
+            ):
+                split_sizes = split_sizes + ((in_channels,),)
+                trsfm_fns = trsfm_fns + (
+                    lambda h: (
+                        AudioTensor(
+                            self.model(torch.transpose(h.as_tensor(), 1, 2))
+                            .squeeze(1)
+                            .sigmoid(),
+                            hop_length=h.hop_length * self.hop_rate,
+                        ),
+                    ),
+                )
+                return other_split_trsfm(split_sizes, trsfm_fns)
+
+            return split_and_trsfm
+
+        self.ctrl = ctrl_fn
+
+    # def forward(
+    #     self,
+    #     phase: AudioTensor,
+    #     table_select_weight: AudioTensor,
+    #     *args,
+    # ) -> AudioTensor:
+    #     """
+    #     input:
+    #         upsampled_phase: (batch, seq_len)
+    #         h: (batch, frames, in_channels)
+    #     """
+    #     # table_control = (
+    #     #     self.model(torch.transpose(h.as_tensor(), 1, 2)).squeeze(1).sigmoid()
+    #     # )
+    #     table_control = AudioTensor(
+    #         table_control, hop_length=h.hop_length * self.hop_rate
+    #     )
+    #     return super().forward(phase, table_select_weight, *args)
 
 
 class DownsampledWeightedGlottalFlowTable(WeightedGlottalFlowTable):
-    hop_rate: int
-
     def __init__(
         self,
         hop_rate: int,
@@ -341,23 +392,45 @@ class DownsampledWeightedGlottalFlowTable(WeightedGlottalFlowTable):
         self.hop_rate = hop_rate
         self.model = get_downsampler(hop_rate, in_channels, self.table.shape[0])
 
-    def forward(
-        self,
-        phase: AudioTensor,
-        h: AudioTensor,
-        *args,
-    ) -> AudioTensor:
-        """
-        input:
-            upsampled_phase: (batch, seq_len)
-            h: (batch, frames, in_channels)
-        """
-        table_control = self.model(h.transpose(1, 2)).softmax(dim=1).transpose(1, 2)
-        table_control = AudioTensor(
-            table_control,
-            hop_length=h.hop_length * self.hop_rate,
-        )
-        return super().forward(phase, table_control, *args)
+        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
+            def split_and_trsfm(
+                split_sizes: Tuple[Tuple[int, ...], ...],
+                trsfm_fns: Tuple[TRSFM_TYPE, ...],
+            ):
+                split_sizes = split_sizes + ((in_channels,),)
+                trsfm_fns = trsfm_fns + (
+                    lambda h: (
+                        AudioTensor(
+                            self.model(torch.transpose(h.as_tensor(), 1, 2))
+                            .softmax(dim=1)
+                            .transpose(1, 2),
+                            hop_length=h.hop_length * self.hop_rate,
+                        ),
+                    ),
+                )
+                return other_split_trsfm(split_sizes, trsfm_fns)
+
+            return split_and_trsfm
+
+        self.ctrl = ctrl_fn
+
+    # def forward(
+    #     self,
+    #     phase: AudioTensor,
+    #     h: AudioTensor,
+    #     *args,
+    # ) -> AudioTensor:
+    #     """
+    #     input:
+    #         upsampled_phase: (batch, seq_len)
+    #         h: (batch, frames, in_channels)
+    #     """
+    #     table_control = self.model(h.transpose(1, 2)).softmax(dim=1).transpose(1, 2)
+    #     table_control = AudioTensor(
+    #         table_control,
+    #         hop_length=h.hop_length * self.hop_rate,
+    #     )
+    #     return super().forward(phase, table_control, *args)
 
 
 class HarmonicOscillator(OscillatorInterface):

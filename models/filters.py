@@ -16,10 +16,12 @@ from .utils import (
     params2biquads,
     AudioTensor,
     hilbert,
-    linear_upsample,
     fir_filt,
+    rc2lpc,
+    get_logits2biquads,
+    biquads2lpc,
 )
-
+from .ctrl import Controllable, TRSFM_TYPE, SPLIT_TRSFM_SIGNATURE
 
 __all__ = [
     "FilterInterface",
@@ -34,7 +36,7 @@ __all__ = [
 ]
 
 
-class FilterInterface(nn.Module):
+class FilterInterface(Controllable):
     def forward(self, ex: Tensor, *args, **kwargs) -> Tensor:
         raise NotImplementedError
 
@@ -49,10 +51,41 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
         self,
         window: str,
         window_length: int,
+        lpc_order: int = None,
+        lpc_parameterisation: str = "rc2lpc",
+        max_abs_value: float = 1.0,
     ):
         super().__init__()
         window = get_window_fn(window)(window_length)
         self.register_buffer("_kernel", torch.diag(window).unsqueeze(1))
+
+        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
+            if lpc_parameterisation != "rc2lpc":
+                logits2biquads = get_logits2biquads(lpc_parameterisation, max_abs_value)
+                logits2lpc = lambda logits: biquads2lpc(
+                    logits2biquads(logits.view(logits.shape[0], logits.shape[1], -1, 2))
+                )
+            else:
+                logits2lpc = lambda logits: rc2lpc(logits.tanh() * max_abs_value)
+
+            def split_and_trsfm(
+                split_sizes: Tuple[Tuple[int, ...], ...],
+                trsfm_fns: Tuple[TRSFM_TYPE, ...],
+            ):
+                split_sizes = split_sizes + ((1, lpc_order),)
+
+                def trsfm_fn(log_gain: AudioTensor, lpc_logits: AudioTensor):
+                    gain = torch.exp(log_gain)
+                    a = lpc_logits.new_tensor(logits2lpc(lpc_logits.as_tensor()))
+                    return gain, a
+
+                trsfm_fns = trsfm_fns + (trsfm_fn,)
+                return other_split_trsfm(split_sizes, trsfm_fns)
+
+            return split_and_trsfm
+
+        if lpc_order is not None:
+            self.ctrl = ctrl_fn
 
     def forward(self, ex: AudioTensor, gain: AudioTensor, a: AudioTensor):
         """
@@ -206,9 +239,23 @@ class LTVMinimumPhaseFIRFilter(LTVMinimumPhaseFIRFilterPrecise):
 
 
 class LTVZeroPhaseFIRFilterPrecise(LTVFilterInterface):
-    def __init__(self, window: str):
+    def __init__(self, window: str, n_mag: int = None):
         super().__init__()
         self.window_fn = get_window_fn(window)
+
+        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
+            def split_and_trsfm(
+                split_sizes: Tuple[Tuple[int, ...], ...],
+                trsfm_fns: Tuple[TRSFM_TYPE, ...],
+            ):
+                split_sizes = split_sizes + ((n_mag,),)
+                trsfm_fns = trsfm_fns + (lambda x: (x,),)
+                return other_split_trsfm(split_sizes, trsfm_fns)
+
+            return split_and_trsfm
+
+        if n_mag is not None:
+            self.ctrl = ctrl_fn
 
     @staticmethod
     def get_zero_phase_fir(log_mag: Tensor):
@@ -259,8 +306,8 @@ class LTVZeroPhaseFIRFilterPrecise(LTVFilterInterface):
 
 
 class LTVZeroPhaseFIRFilter(LTVZeroPhaseFIRFilterPrecise):
-    def __init__(self, window: str, conv_method: str = "direct"):
-        super().__init__(window=window)
+    def __init__(self, window: str, conv_method: str = "direct", n_mag: int = None):
+        super().__init__(window=window, n_mag=n_mag)
         if conv_method == "direct":
             self.convolve_fn = F.conv1d
         elif conv_method == "fft":

@@ -7,6 +7,7 @@ from typing import List, Dict, Tuple, Callable, Union
 from torchaudio.transforms import MelSpectrogram
 import numpy as np
 import yaml
+from importlib import import_module
 from frechet_audio_distance import FrechetAudioDistance
 
 from models.utils import get_window_fn
@@ -77,10 +78,11 @@ class DDSPVocoderCLI(LightningCLI):
 class DDSPVocoder(pl.LightningModule):
     def __init__(
         self,
-        encoder: VocoderParameterEncoderInterface,
         decoder: SourceFilterSynth,
         feature_trsfm: ScaledLogMelSpectrogram,
         criterion: nn.Module,
+        encoder_class_path: str = "models.enc.VocoderParameterEncoderInterface",
+        encoder_init_args: Dict = {},
         window: str = "hanning",
         sample_rate: int = 24000,
         hop_length: int = 120,
@@ -95,10 +97,16 @@ class DDSPVocoder(pl.LightningModule):
 
         # self.save_hyperparameters()
 
-        self.encoder = encoder
         self.decoder = decoder
         self.criterion = criterion
         self.feature_trsfm = feature_trsfm
+
+        module_path, class_name = encoder_class_path.rsplit(".", 1)
+        module = import_module(module_path)
+        split_sizes, trsfms = self.decoder.get_split_sizes_and_trsfms()
+        self.encoder = getattr(module, class_name)(
+            split_sizes=split_sizes, trsfms=trsfms, **encoder_init_args
+        )
 
         self.sample_rate = sample_rate
         self.hop_length = hop_length
@@ -128,10 +136,12 @@ class DDSPVocoder(pl.LightningModule):
         return F.l1_loss(torch.log(f0_hat + 1e-3), torch.log(f0 + 1e-3))
 
     def on_train_start(self) -> None:
-        self.logger.watch(self.encoder, log_freq=1000, log="all", log_graph=False)
+        if self.logger is not None:
+            self.logger.watch(self.encoder, log_freq=1000, log="all", log_graph=False)
 
     def on_train_end(self) -> None:
-        self.logger.experiment.unwatch(self.encoder)
+        if self.logger is not None:
+            self.logger.experiment.unwatch(self.encoder)
 
     def training_step(self, batch, batch_idx):
         x, f0_in_hz = batch

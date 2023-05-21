@@ -21,23 +21,21 @@ class BackboneModelInterface(nn.Module):
 
 
 class VocoderParameterEncoderInterface(nn.Module):
-    split_size: List[int]
-    log_f0_min: float
-    log_f0_max: float
-    backbone: BackboneModelInterface
-
     def __init__(
         self,
         backbone_type: str,
         learn_voicing: bool = False,
         f0_min: float = 80,
         f0_max: float = 1000,
-        extra_split_sizes: List[int] = [],
+        split_sizes: Tuple[Tuple[int, ...], ...] = (),
+        trsfms: Tuple[Callable[..., Tuple[torch.Tensor, ...]], ...] = (),
         **kwargs,
     ):
         super().__init__()
-        extra_split_sizes = ([1, 1] if learn_voicing else [1]) + extra_split_sizes
-        self.split_size = extra_split_sizes
+        self.split_sizes = split_sizes
+        self.trsfms = trsfms
+        concated_split_sizes = sum(split_sizes, ())
+        self._split_size = ((1, 1) if learn_voicing else (1,)) + concated_split_sizes
         self.learn_voicing = learn_voicing
         self.log_f0_min = math.log(f0_min)
         self.log_f0_max = math.log(f0_max)
@@ -46,36 +44,35 @@ class VocoderParameterEncoderInterface(nn.Module):
         module = import_module(module_path)
 
         self.backbone = getattr(module, class_name)(
-            out_channels=sum(self.split_size), **kwargs
+            out_channels=sum(self._split_size), **kwargs
         )
         # self.backbone = torch.compile(self.backbone)
 
-    def logits2f0(self, logits: Tensor) -> Tensor:
+    def logits2f0(self, logits: AudioTensor) -> AudioTensor:
         return torch.exp(
-            logits.sigmoid() * (self.log_f0_max - self.log_f0_min) + self.log_f0_min
+            torch.sigmoid(logits) * (self.log_f0_max - self.log_f0_min) + self.log_f0_min
         )
 
     def forward(
         self, h: AudioTensor
     ) -> Tuple[AudioTensor, ...,]:
-        """
-        Args:
-            h: (batch_size, frames, features)
-        Returns:
-            harm_osc_params: Tuple[Tensor, ...]
-            harm_filt_params: Tuple[Tensor, ...]
-            noise_filt_params: Tuple[Tensor, ...]
-            noise_params: Tuple[Tensor, ...]
-        """
-        f0_logits, *_ = self.backbone(h.as_tensor()).split(self.split_size, dim=-1)
-        f0 = self.logits2f0(f0_logits).squeeze(-1)
-        f0 = h.new_tensor(f0)
+        f0_logits, *_ = [
+            h.new_tensor(torch.squeeze(t, 2))
+            for t in self.backbone(h.as_tensor()).split(self._split_size, dim=2)
+        ]
+        f0 = self.logits2f0(f0_logits)
         if self.learn_voicing:
-            voicing = f0.new_tensor(_[0].squeeze(-1))
-            _ = _[1:]
+            voicing, *_ = _
         else:
             voicing = None
-        return (f0,) + tuple(h.new_tensor(x) for x in _) + (voicing,)
+
+        groupped_logits = []
+        for splits in self.split_sizes:
+            groupped_logits.append(_[: len(splits)])
+            _ = _[len(splits) :]
+
+        transformed = map(lambda x: x[0](*x[1]), zip(self.trsfms, groupped_logits))
+        return (f0,) + tuple(transformed) + (voicing,)
 
 
 class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):

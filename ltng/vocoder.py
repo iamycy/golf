@@ -138,10 +138,16 @@ class DDSPVocoder(pl.LightningModule):
     def on_train_start(self) -> None:
         if self.logger is not None:
             self.logger.watch(self.encoder, log_freq=1000, log="all", log_graph=False)
+            if len(tuple(self.decoder.parameters())) > 0:
+                self.logger.watch(
+                    self.decoder, log_freq=1000, log="all", log_graph=False
+                )
 
     def on_train_end(self) -> None:
         if self.logger is not None:
             self.logger.experiment.unwatch(self.encoder)
+            if len(tuple(self.decoder.parameters())) > 0:
+                self.logger.experiment.unwatch(self.decoder)
 
     def training_step(self, batch, batch_idx):
         x, f0_in_hz = batch

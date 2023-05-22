@@ -57,6 +57,12 @@ class AudioTensor(object):
     def dim(self):
         return self._data.dim()
 
+    def __matmul__(self, other):
+        return torch.matmul(self, other)
+
+    def __rmatmul__(self, other):
+        return torch.matmul(other, self)
+
     def __neg__(self):
         return torch.neg(self)
 

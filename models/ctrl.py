@@ -1,7 +1,9 @@
 from typing import Callable, List, Optional, Tuple, Union
 import torch
 
-TRSFM_TYPE = Callable[..., Tuple[torch.Tensor, ...]]
+from .utils import AudioTensor
+
+TRSFM_TYPE = Callable[..., Tuple[AudioTensor, ...]]
 
 SPLIT_TRSFM_SIGNATURE = Callable[
     [Tuple[Tuple[int, ...], ...], Tuple[TRSFM_TYPE, ...]],

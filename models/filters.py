@@ -287,7 +287,7 @@ class LTVZeroPhaseFIRFilterPrecise(LTVFilterInterface):
         # upsampled_kernel = linear_upsample(
         #     kernel.transpose(1, 2).contiguous(), ctx
         # ).transpose(1, 2)
-        upsampled_kernel = log_mag.as_tensor(kernel).reduce_hop_length()
+        upsampled_kernel = kernel.reduce_hop_length()
 
         # ex = ex[:, : upsampled_kernel.shape[1]]
         # upsampled_kernel = upsampled_kernel[:, : ex.shape[1]]
@@ -296,13 +296,11 @@ class LTVZeroPhaseFIRFilterPrecise(LTVFilterInterface):
         padding_right = kernel.shape[-1] - 1 - padding_left
 
         ex = F.pad(ex, (padding_left, padding_right), "constant", 0).unfold(
-            -1, kernel.shape[-1], 1
+            kernel.shape[-1], 1
         )
-        return (
-            torch.matmul(ex.unsqueeze(-2), upsampled_kernel.unsqueeze(-1))
-            .squeeze(-1)
-            .squeeze(-1)
-        )
+        return torch.matmul(
+            torch.unsqueeze(ex, -2), torch.unsqueeze(upsampled_kernel, -1)
+        )[..., 0, 0]
 
 
 class LTVZeroPhaseFIRFilter(LTVZeroPhaseFIRFilterPrecise):

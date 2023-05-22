@@ -360,25 +360,6 @@ class DownsampledIndexedGlottalFlowTable(IndexedGlottalFlowTable):
 
         self.ctrl = ctrl_fn
 
-    # def forward(
-    #     self,
-    #     phase: AudioTensor,
-    #     table_select_weight: AudioTensor,
-    #     *args,
-    # ) -> AudioTensor:
-    #     """
-    #     input:
-    #         upsampled_phase: (batch, seq_len)
-    #         h: (batch, frames, in_channels)
-    #     """
-    #     # table_control = (
-    #     #     self.model(torch.transpose(h.as_tensor(), 1, 2)).squeeze(1).sigmoid()
-    #     # )
-    #     table_control = AudioTensor(
-    #         table_control, hop_length=h.hop_length * self.hop_rate
-    #     )
-    #     return super().forward(phase, table_select_weight, *args)
-
 
 class DownsampledWeightedGlottalFlowTable(WeightedGlottalFlowTable):
     def __init__(
@@ -413,24 +394,6 @@ class DownsampledWeightedGlottalFlowTable(WeightedGlottalFlowTable):
             return split_and_trsfm
 
         self.ctrl = ctrl_fn
-
-    # def forward(
-    #     self,
-    #     phase: AudioTensor,
-    #     h: AudioTensor,
-    #     *args,
-    # ) -> AudioTensor:
-    #     """
-    #     input:
-    #         upsampled_phase: (batch, seq_len)
-    #         h: (batch, frames, in_channels)
-    #     """
-    #     table_control = self.model(h.transpose(1, 2)).softmax(dim=1).transpose(1, 2)
-    #     table_control = AudioTensor(
-    #         table_control,
-    #         hop_length=h.hop_length * self.hop_rate,
-    #     )
-    #     return super().forward(phase, table_control, *args)
 
 
 class HarmonicOscillator(OscillatorInterface):

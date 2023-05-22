@@ -416,12 +416,11 @@ class HarmonicOscillator(OscillatorInterface):
         """
 
         # harmonic synth
-        assert phase.hop_length == 1
+        # assert phase.hop_length == 1
         n_harmonic = amplitudes.shape[-1]
         harm_series = torch.arange(1, n_harmonic + 1).to(phase.device)
-        harmonics = phase.unsqueeze(-1) * harm_series
+        harmonics = torch.unsqueeze(phase, -1) * harm_series
         harmonics = harmonics.reduce_hop_length()
-        alias_mask = harmonics >= 0.5
 
         phase = torch.cumsum(harmonics, axis=1)
         if phase_offset is not None:
@@ -432,17 +431,13 @@ class HarmonicOscillator(OscillatorInterface):
         if initial_phase is not None:
             phase = phase + initial_phase.unsqueeze(1)
 
-        amplitudes = amplitudes.reduce_hop_length()
-
         # anti-aliasing
-        amplitudes = torch.where(alias_mask, 0, amplitudes)
+        amplitudes = torch.where(harmonics >= 0.5, 0, amplitudes.reduce_hop_length())
 
         # signal
-        return (
-            (torch.sin(phase * 2 * torch.pi)[..., None, :] @ amplitudes[..., None])
-            .squeeze(-1)
-            .squeeze(-1)
-        )
+        return (torch.sin(phase * 2 * torch.pi)[..., None, :] @ amplitudes[..., None])[
+            ..., 0, 0
+        ]
 
 
 class SawToothOscillator(HarmonicOscillator):
@@ -494,8 +489,12 @@ class AdditivePulseTrain(HarmonicOscillator):
         **kwargs,
     ) -> AudioTensor:
         amplitudes = (
-            torch.ones_like(phase).unsqueeze(-1).repeat(1, 1, self.num_harmonics)
+            torch.ones_like(phase)
+            .as_tensor()
+            .unsqueeze(-1)
+            .repeat(1, 1, self.num_harmonics)
         )
         num_freq_bins = 0.5 / phase
-        amplitudes = amplitudes * num_freq_bins.unsqueeze(-1).rsqrt()
+        amplitudes = amplitudes * torch.rsqrt(torch.unsqueeze(num_freq_bins, -1))
+        # amplitudes = phase.new_tensor(amplitudes)
         return super().forward(phase, amplitudes, initial_phase, phase_offset)

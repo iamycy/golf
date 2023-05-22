@@ -420,16 +420,41 @@ class LTIRealCoeffAllpassFilter(LTIComplexConjAllpassFilter):
 
 
 class LTVMLSAFilter(LTVFilterInterface):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        filter_order: int,
+        frame_period: int,
+        *args,
+        use_ratio: bool = False,
+        **kwargs,
+    ) -> None:
         super().__init__()
 
         self.mlsa = MLSA(
+            filter_order,
             *args,
+            frame_period=frame_period,
             cascade=True,
             **kwargs,
         )
 
+        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
+            def split_and_trsfm(
+                split_sizes: Tuple[Tuple[int, ...], ...],
+                trsfm_fns: Tuple[TRSFM_TYPE, ...],
+            ):
+                split_sizes = split_sizes + ((filter_order + 1,),)
+                trsfm_fns = trsfm_fns + (
+                    lambda x: (torch.sigmoid(x),) if use_ratio else (x,),
+                )
+                return other_split_trsfm(split_sizes, trsfm_fns)
+
+            return split_and_trsfm
+
+        self.ctrl = ctrl_fn
+
     def forward(self, ex: AudioTensor, mc: AudioTensor, **kwargs):
+        assert mc.hop_length == self.mlsa.frame_period
         ex = ex.as_tensor()
         mc = mc.as_tensor()
         minimum_frames = ex.shape[1] // self.mlsa.frame_period

@@ -187,7 +187,6 @@ class GlottalRC2LPCEncoder(VocoderParameterEncoderInterface):
         extra_split_sizes: List[int] = [],
         kwargs: dict = {},
     ):
-
         extra_split_sizes.extend(
             [
                 table_weight_hidden_size,

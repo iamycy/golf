@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torchaudio.functional import lfilter
 from torch_fftconv.functional import fft_conv1d
 from typing import Optional, Union, List, Tuple, Callable, Any
-from diffsptk import MLSA
+from diffsptk import MLSA, MelCepstralAnalysis
 
 
 from .lpc import lpc_synthesis
@@ -425,7 +425,6 @@ class LTVMLSAFilter(LTVFilterInterface):
         filter_order: int,
         frame_period: int,
         *args,
-        use_ratio: bool = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -444,9 +443,7 @@ class LTVMLSAFilter(LTVFilterInterface):
                 trsfm_fns: Tuple[TRSFM_TYPE, ...],
             ):
                 split_sizes = split_sizes + ((filter_order + 1,),)
-                trsfm_fns = trsfm_fns + (
-                    lambda x: (torch.sigmoid(x),) if use_ratio else (x,),
-                )
+                trsfm_fns = trsfm_fns + (lambda x: (x,),)
                 return other_split_trsfm(split_sizes, trsfm_fns)
 
             return split_and_trsfm
@@ -461,3 +458,43 @@ class LTVMLSAFilter(LTVFilterInterface):
         ex = ex[:, : minimum_frames * self.mlsa.frame_period]
         mc = mc[:, :minimum_frames]
         return AudioTensor(self.mlsa(ex, mc))
+
+
+class LTVAPFilter(LTVMLSAFilter):
+    def __init__(
+        self,
+        n_mag: int,
+        filter_order: int,
+        frame_period: int,
+        *args,
+        alpha: float = 0,
+        gamma: float = 0,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            filter_order,
+            frame_period,
+            *args,
+            phase="zero",
+            alpha=alpha,
+            gamma=gamma,
+            **kwargs,
+        )
+
+        n_fft = n_mag * 2 - 2
+        self.mcep = MelCepstralAnalysis(filter_order, n_fft, alpha=alpha, gamma=gamma)
+
+        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
+            def split_and_trsfm(
+                split_sizes: Tuple[Tuple[int, ...], ...],
+                trsfm_fns: Tuple[TRSFM_TYPE, ...],
+            ):
+                split_sizes = split_sizes + ((n_mag,),)
+                trsfm_fns = trsfm_fns + (
+                    lambda x: (x.new_tensor(self.mcep(torch.sigmoid(x.as_tensor()))),),
+                )
+                return other_split_trsfm(split_sizes, trsfm_fns)
+
+            return split_and_trsfm
+
+        self.ctrl = ctrl_fn

@@ -16,8 +16,10 @@ class SourceFilterSynth(nn.Module):
         noise_generator: NoiseInterface,
         noise_filter: LTVFilterInterface,
         end_filter: LTVFilterInterface,
+        subtract_harmonics: bool = True,
     ):
         super().__init__()
+        self.subtract_harmonics = subtract_harmonics
 
         # Time-varying components
         self.harm_oscillator = harm_oscillator
@@ -41,13 +43,13 @@ class SourceFilterSynth(nn.Module):
             assert torch.all(voicing >= 0) and torch.all(voicing <= 1)
             harm_osc = harm_osc * voicing
 
-        src = (
-            harm_osc
-            + self.noise_filter(
-                self.noise_generator(harm_osc, *noise_params), *noise_filt_params
-            )
-            - self.noise_filter(harm_osc, *noise_filt_params)
+        src = harm_osc + self.noise_filter(
+            self.noise_generator(harm_osc, *noise_params), *noise_filt_params
         )
+
+        if self.subtract_harmonics:
+            src = src - self.noise_filter(harm_osc, *noise_filt_params)
+
         return self.end_filter(src, *end_filt_params)
 
     def get_split_sizes_and_trsfms(self):

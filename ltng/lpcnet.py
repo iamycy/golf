@@ -48,12 +48,13 @@ class LPCNetVocoder(pl.LightningModule):
         window: str = "hanning",
         sample_rate: int = 24000,
         hop_length: int = 120,
+        gamma: float = 1.0,
     ):
         super().__init__()
 
         # self.save_hyperparameters()
 
-        self.frame_decoder = frame_decoder
+        self.frame_decoder = nn.Sequential(frame_decoder, nn.Tanh())
         self.sample_decoder = sample_decoder
         self.feature_trsfm = feature_trsfm
         self.mu_enc = ContinuousMuLawEncoding(quantization_channels)
@@ -64,6 +65,7 @@ class LPCNetVocoder(pl.LightningModule):
         self.sample_rate = sample_rate
         self.hop_length = hop_length
         self.lpc_order = lpc_order
+        self.gamma = gamma
 
         mu = quantization_channels - 1.0
         self.regularizer = (
@@ -110,7 +112,7 @@ class LPCNetVocoder(pl.LightningModule):
             torch.gather(log_prob, 1, lower_idx) * (1 - p)
             + torch.gather(log_prob, 1, upper_idx) * p
         )
-        return -selected_log_probs.mean() + self.regularizer(e_mu)
+        return selected_log_probs.mean(), self.regularizer(e_mu)
 
     def training_step(self, batch, batch_idx):
         x, _ = batch
@@ -121,9 +123,9 @@ class LPCNetVocoder(pl.LightningModule):
         feats = self.feature_trsfm(x)
 
         f = self.frame_decoder(feats)
-        lpc = rc2lpc(f[..., : self.lpc_order].tanh())
+        lpc = rc2lpc(f[..., : self.lpc_order].as_tensor())
 
-        f = AudioTensor(f, hop_length=self.hop_length).reduce_hop_length().as_tensor()
+        f = f.reduce_hop_length().as_tensor()
         upsampled_lpc = (
             AudioTensor(lpc, hop_length=self.hop_length).reduce_hop_length().as_tensor()
         )
@@ -144,9 +146,12 @@ class LPCNetVocoder(pl.LightningModule):
             f[:, 1:], p_mu[:, 1:], s_mu[:, :-1], e_mu[:, :-1]
         )
 
-        loss = self.interp_loss(e_mu[:, 1:], pred_e_logits.transpose(1, 2))
+        ll, reg = self.interp_loss(e_mu[:, 1:], pred_e_logits.transpose(1, 2))
+        loss = -ll + self.gamma * reg
 
         self.log("train_loss", loss, prog_bar=True, sync_dist=True)
+        self.log("train_ll", ll, prog_bar=False, sync_dist=True)
+        self.log("train_reg", reg, prog_bar=False, sync_dist=True)
         return loss
 
     def on_validation_epoch_start(self) -> None:
@@ -159,9 +164,9 @@ class LPCNetVocoder(pl.LightningModule):
         feats = self.feature_trsfm(x)
 
         f = self.frame_decoder(feats)
-        lpc = rc2lpc(f[..., : self.lpc_order].tanh())
+        lpc = rc2lpc(f[..., : self.lpc_order].as_tensor())
 
-        f = AudioTensor(f, hop_length=self.hop_length).reduce_hop_length().as_tensor()
+        f = f.reduce_hop_length().as_tensor()
         upsampled_lpc = (
             AudioTensor(lpc, hop_length=self.hop_length).reduce_hop_length().as_tensor()
         )
@@ -181,16 +186,21 @@ class LPCNetVocoder(pl.LightningModule):
             f[:, 1:], p_mu[:, 1:], s_mu[:, :-1], e_mu[:, :-1]
         )
 
-        loss = self.interp_loss(e_mu[:, 1:], pred_e_logits.transpose(1, 2))
+        ll, reg = self.interp_loss(e_mu[:, 1:], pred_e_logits.transpose(1, 2))
+        loss = -ll + self.gamma * reg
 
-        self.tmp_val_outputs.append((loss,))
+        self.tmp_val_outputs.append((loss, ll, reg))
 
         return loss
 
     def on_validation_epoch_end(self) -> None:
         outputs = self.tmp_val_outputs
         avg_loss = sum(x[0] for x in outputs) / len(outputs)
+        avg_ll = sum(x[1] for x in outputs) / len(outputs)
+        avg_reg = sum(x[2] for x in outputs) / len(outputs)
 
         self.log("val_loss", avg_loss, prog_bar=True, sync_dist=True)
+        self.log("val_ll", avg_ll, prog_bar=False, sync_dist=True)
+        self.log("val_reg", avg_reg, prog_bar=False, sync_dist=True)
 
         delattr(self, "tmp_val_outputs")

@@ -54,13 +54,7 @@ class SampleNet(nn.Module):
         self.a_channels = a_channels
         self.b_channels = b_channels
 
-        self.embedding_s = InterpolatedEmbedding(
-            quantization_channels, quantization_channels
-        )
-        self.embedding_e = InterpolatedEmbedding(
-            quantization_channels, quantization_channels
-        )
-        self.embedding_p = InterpolatedEmbedding(
+        self.embeddings = InterpolatedEmbedding(
             quantization_channels, quantization_channels
         )
         # for i in "urh":
@@ -78,7 +72,9 @@ class SampleNet(nn.Module):
             bias=False,
             batch_first=True,
         )
-        self.gru_b = nn.GRU(a_channels, b_channels, bias=False, batch_first=True)
+        self.gru_b = nn.GRU(
+            a_channels + condition_channels, b_channels, bias=False, batch_first=True
+        )
 
         self.a = nn.Parameter(torch.randn(quantization_channels * 2))
         self.fc = nn.Sequential(
@@ -121,11 +117,12 @@ class SampleNet(nn.Module):
 
         # h = torch.stack(outputs, dim=1)
 
-        p = self.embedding_p(p)
-        s = self.embedding_s(s_prev)
-        e = self.embedding_e(e_prev)
+        p = self.embeddings(p)
+        s = self.embeddings(s_prev)
+        e = self.embeddings(e_prev)
         h = torch.cat([f, p, s, e], dim=-1)
         h, _ = self.gru_a(h)
+        h = torch.cat([h, f], dim=-1)
         h, _ = self.gru_b(h)
 
         h = self.fc(h) * self.a

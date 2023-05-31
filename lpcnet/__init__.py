@@ -83,39 +83,6 @@ class SampleNet(nn.Module):
         )
 
     def forward(self, f: Tensor, p: Tensor, s_prev: Tensor, e_prev: Tensor) -> Tensor:
-        # GRU A
-        # g_u, g_r, g_h = torch.chunk(self.cond_linear(f), 3, dim=-1)
-
-        # u_s = self.embedding_u_s(s_prev)
-        # u_p = self.embedding_u_p(p)
-        # u_e = self.embedding_u_e(e_prev)
-        # r_s = self.embedding_r_s(s_prev)
-        # r_p = self.embedding_r_p(p)
-        # r_e = self.embedding_r_e(e_prev)
-        # h_s = self.embedding_h_s(s_prev)
-        # h_p = self.embedding_h_p(p)
-        # h_e = self.embedding_h_e(e_prev)
-
-        # batch, T, _ = f.shape
-        # h = f.new_zeros(batch, self.a_channels)
-        # outputs = []
-        # for i in range(T):
-        #     h_u, h_r, h_h = torch.chunk(self.W_a(h), 3, dim=-1)
-        #     u = torch.sigmoid(g_u[:, i] + h_u + u_s[:, i] + u_p[:, i] + u_e[:, i])
-        #     r = torch.sigmoid(g_r[:, i] + h_r + r_s[:, i] + r_p[:, i] + r_e[:, i])
-        #     h_hat = torch.tanh(g_h[:, i] + h_h * r + h_s[:, i] + h_p[:, i] + h_e[:, i])
-        #     h = (1 - u) * h + u * h_hat
-        #     outputs.append(h)
-
-        # # GRU B
-        # x = torch.stack(outputs, dim=1)
-        # h = x.new_zeros(batch, self.b_channels)
-        # outputs = []
-        # for i in range(T):
-        #     h = self.gru_b(x[:, i], h)
-        #     outputs.append(h)
-
-        # h = torch.stack(outputs, dim=1)
 
         p = self.embeddings(p)
         s = self.embeddings(s_prev)
@@ -147,25 +114,25 @@ class SampleNet(nn.Module):
         else:
             state_a, state_b = states
 
-        g_u, g_r, g_h = torch.chunk(self.cond_linear(f), 3, dim=-1)
+        p = self.embeddings(p)
+        s = self.embeddings(s_prev)
+        e = self.embeddings(e_prev)
+        x = torch.cat([f, p, s, e], dim=-1)
 
-        u_s = self.embedding_u_s(s_prev)
-        u_p = self.embedding_u_p(p)
-        u_e = self.embedding_u_e(e_prev)
-        r_s = self.embedding_r_s(s_prev)
-        r_p = self.embedding_r_p(p)
-        r_e = self.embedding_r_e(e_prev)
-        h_s = self.embedding_h_s(s_prev)
-        h_p = self.embedding_h_p(p)
-        h_e = self.embedding_h_e(e_prev)
+        x_ir, x_iz, x_in = (x @ self.gru_a.weight_ih_l0.T).chunk(3, dim=-1)
+        h_ir, h_iz, h_in = (state_a @ self.gru_a.weight_hh_l0.T).chunk(3, dim=-1)
+        r = torch.sigmoid(x_ir + h_ir)
+        z = torch.sigmoid(x_iz + h_iz)
+        n = torch.tanh(x_in + r * h_in)
+        state_a = (1 - z) * n + z * state_a
 
-        h_u, h_r, h_h = torch.chunk(self.W_a(state_a), 3, dim=-1)
-        u = torch.sigmoid(g_u + h_u + u_s + u_p + u_e)
-        r = torch.sigmoid(g_r + h_r + r_s + r_p + r_e)
-        h_hat = torch.tanh(g_h + h_h * r + h_s + h_p + h_e)
-        state_a = (1 - u) * state_a + u * h_hat
-
-        state_b = self.gru_b(state_a, state_b)
+        x = torch.cat([state_a, f], dim=-1)
+        x_ir, x_iz, x_in = (x @ self.gru_b.weight_ih_l0.T).chunk(3, dim=-1)
+        h_ir, h_iz, h_in = (state_b @ self.gru_b.weight_hh_l0.T).chunk(3, dim=-1)
+        r = torch.sigmoid(x_ir + h_ir)
+        z = torch.sigmoid(x_iz + h_iz)
+        n = torch.tanh(x_in + r * h_in)
+        state_b = (1 - z) * n + z * state_b
 
         h = self.fc(state_b) * self.a
         h = h.view(batch, -1, 2).sum(dim=-1)

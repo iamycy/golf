@@ -13,7 +13,7 @@ from frechet_audio_distance import FrechetAudioDistance
 from torchaudio.transforms import Preemphasis, Deemphasis
 
 from models.utils import get_window_fn, rc2lpc, fir_filt, AudioTensor
-from lpcnet import SampleNet, ContinuousMuLawDecoding, ContinuousMuLawEncoding
+from models.lpcnet import SampleNet, ContinuousMuLawDecoding, ContinuousMuLawEncoding
 
 
 class LPCNetVocoderCLI(LightningCLI):

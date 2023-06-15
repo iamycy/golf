@@ -31,7 +31,7 @@ class InterpolatedEmbedding(nn.Embedding):
         assert torch.all(x >= 0), x.min().item()
         assert torch.all(x <= (self.num_embeddings - 1)), x.max().item()
 
-        raw_idx = x * (num_embeddings - 1)
+        raw_idx = x
         lower_idx = torch.floor(raw_idx).long().clip(0, num_embeddings - 2)
         upper_idx = lower_idx + 1
         p = raw_idx - lower_idx

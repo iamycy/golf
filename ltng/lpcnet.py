@@ -7,12 +7,13 @@ from typing import List, Dict, Tuple, Callable, Union
 from torchaudio.transforms import MelSpectrogram
 import numpy as np
 import yaml
+from tqdm import tqdm
 import math
 from importlib import import_module
 from frechet_audio_distance import FrechetAudioDistance
 from torchaudio.transforms import Preemphasis, Deemphasis
 
-from models.utils import get_window_fn, rc2lpc, fir_filt, AudioTensor
+from models.utils import get_window_fn, rc2lpc, fir_filt, AudioTensor, get_f0, freq2cent
 from models.lpcnet import SampleNet, ContinuousMuLawDecoding, ContinuousMuLawEncoding
 
 
@@ -70,21 +71,6 @@ class LPCNetVocoder(pl.LightningModule):
         mu = quantization_channels - 1.0
         self.regularizer = (
             lambda x: (x - 0.5 * mu).abs().mean() * math.log1p(mu) / mu * 2
-        )
-
-    def forward(self, feats: torch.Tensor):
-        (f0, *other_params, voicing_logits) = self.encoder(feats)
-
-        phase = f0 / self.sample_rate
-        if voicing_logits is not None:
-            voicing = torch.sigmoid(voicing_logits)
-        else:
-            voicing = None
-
-        return (
-            f0,
-            self.decoder(phase, *other_params, voicing=voicing),
-            voicing,
         )
 
     def on_train_start(self) -> None:
@@ -204,3 +190,117 @@ class LPCNetVocoder(pl.LightningModule):
         self.log("val_reg", avg_reg, prog_bar=False, sync_dist=True)
 
         delattr(self, "tmp_val_outputs")
+
+    def on_test_start(self) -> None:
+        frechet = FrechetAudioDistance(
+            use_pca=False, use_activation=False, verbose=True
+        )
+        frechet.model = frechet.model.to(self.device)
+        self.frechet = frechet
+
+        self.tmp_test_outputs = []
+
+        return super().on_test_start()
+
+    def test_step(self, batch, batch_idx):
+        x, f0_in_hz = batch
+        f0_in_hz = f0_in_hz[:, :: self.hop_length].cpu().numpy()
+
+        s = self.pre_emphasis(x)
+        feats = self.feature_trsfm(x)
+
+        f = self.frame_decoder(feats)
+        lpc = rc2lpc(f[..., : self.lpc_order].as_tensor())
+
+        f = f.reduce_hop_length().as_tensor()
+        upsampled_lpc = (
+            AudioTensor(lpc, hop_length=self.hop_length).reduce_hop_length().as_tensor()
+        )
+        minimum_length = min(upsampled_lpc.shape[1], s.shape[1])
+        lpc_order = upsampled_lpc.shape[2]
+        s = s[:, :minimum_length]
+        upsampled_lpc = upsampled_lpc[:, :minimum_length]
+        f = f[:, :minimum_length]
+
+        s_buffer = f.new_zeros(f.shape[0], lpc_order + minimum_length)
+        e_mu_prev = (
+            f.new_ones(f.shape[0]) * (self.mu_enc.quantization_channels - 1) * 0.5
+        )
+        states = None
+        for i in tqdm(range(minimum_length)):
+            p = -torch.sum(s_buffer[:, i : i + lpc_order] * upsampled_lpc[:, i], dim=1)
+            p = p.clip(-1, 1)
+            logits, states = self.sample_decoder.sample_forward(
+                f[:, i],
+                self.mu_enc(p),
+                self.mu_enc(s_buffer[:, i + lpc_order - 1]),
+                e_mu_prev,
+                states,
+            )
+            probs = F.softmax(logits * 2, dim=1)
+            dist = torch.distributions.Categorical(probs=probs)
+            e_mu = dist.sample().float()
+            e = self.mu_dec(e_mu)
+            pred = e + p
+            s_buffer[:, i + lpc_order] = pred.clip(-1, 1)
+            e_mu_prev = e_mu
+
+        s_hat = s_buffer[:, lpc_order:]
+        x_hat = self.de_emphasis(s_hat)
+
+        x_hat = x_hat.cpu().numpy().astype(np.float64)
+        x = x.cpu().numpy().astype(np.float64)
+        N = x_hat.shape[0]
+        f0_hat_list = []
+        x_true_embs = []
+        x_hat_embs = []
+        for i in range(N):
+            f0_hat, _ = get_f0(x_hat[i], self.sample_rate)
+            f0_hat_list.append(f0_hat)
+
+            x_hat_emb = (
+                self.frechet.model.forward(x_hat[i], self.sample_rate).cpu().numpy()
+            )
+            x_hat_embs.append(x_hat_emb)
+            x_emb = self.frechet.model.forward(x[i], self.sample_rate).cpu().numpy()
+            x_true_embs.append(x_emb)
+
+        x_true_embs = np.concatenate(x_true_embs, axis=0)
+        x_hat_embs = np.concatenate(x_hat_embs, axis=0)
+        f0_hat = np.stack(f0_hat_list, axis=0)
+        f0_in_hz = f0_in_hz[:, : f0_hat.shape[1]]
+        f0_hat = f0_hat[:, : f0_in_hz.shape[1]]
+        f0_in_hz = np.maximum(f0_in_hz, 80)
+        f0_hat = np.maximum(f0_hat, 80)
+        f0_loss = np.mean(np.abs(freq2cent(f0_hat) - freq2cent(f0_in_hz)))
+
+        self.tmp_test_outputs.append((f0_loss, x_true_embs, x_hat_embs, N))
+
+        return f0_loss, x_true_embs, x_hat_embs, N
+
+    def on_test_epoch_end(self) -> None:
+        outputs = self.tmp_test_outputs
+        weights = [x[3] for x in outputs]
+        avg_f0_loss = np.average([x[0] for x in outputs], weights=weights)
+
+        x_true_embs = np.concatenate([x[1] for x in outputs], axis=0)
+        x_hat_embs = np.concatenate([x[2] for x in outputs], axis=0)
+
+        mu_background, sigma_background = self.frechet.calculate_embd_statistics(
+            x_hat_embs
+        )
+        mu_eval, sigma_eval = self.frechet.calculate_embd_statistics(x_true_embs)
+        fad_score = self.frechet.calculate_frechet_distance(
+            mu_background, sigma_background, mu_eval, sigma_eval
+        )
+
+        self.log_dict(
+            {
+                "avg_f0_loss": avg_f0_loss,
+                "fad_score": fad_score,
+            },
+            prog_bar=True,
+            sync_dist=True,
+        )
+        delattr(self, "tmp_test_outputs")
+        return

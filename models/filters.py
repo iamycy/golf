@@ -1,7 +1,8 @@
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
-from torchaudio.functional import lfilter
+from torchaudio.functional import lfilter, melscale_fbanks
+from torchaudio.transforms import Spectrogram, InverseSpectrogram
 from torch_fftconv.functional import fft_conv1d
 from typing import Optional, Union, List, Tuple, Callable, Any
 from diffsptk import MLSA, MelCepstralAnalysis
@@ -498,3 +499,57 @@ class LTVAPFilter(LTVMLSAFilter):
             return split_and_trsfm
 
         self.ctrl = ctrl_fn
+
+
+class DiffWorldSPFilter(LTVFilterInterface):
+    def __init__(
+        self,
+        n_mels: int,
+        n_fft: int,
+        hop_length: int,
+        f_min: float,
+        f_max: float,
+        center: bool = True,
+        window: str = "hanning",
+        **kwargs,
+    ) -> None:
+        super().__init__()
+        fb = melscale_fbanks(n_fft // 2 + 1, f_min, f_max, n_mels, **kwargs)
+        inv_fb = torch.linalg.pinv(fb).relu()
+        self.register_buffer("fb", inv_fb)
+
+        self.stft = Spectrogram(
+            n_fft=n_fft,
+            hop_length=hop_length,
+            window_fn=get_window_fn(window),
+            power=None,
+            center=center,
+        )
+        self.istft = InverseSpectrogram(
+            n_fft=n_fft,
+            hop_length=hop_length,
+            window_fn=get_window_fn(window),
+            center=center,
+        )
+
+        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
+            def split_and_trsfm(
+                split_sizes: Tuple[Tuple[int, ...], ...],
+                trsfm_fns: Tuple[TRSFM_TYPE, ...],
+            ):
+                split_sizes = split_sizes + ((n_mels,),)
+                trsfm_fns = trsfm_fns + (lambda x: (torch.exp(x),),)
+                return other_split_trsfm(split_sizes, trsfm_fns)
+
+            return split_and_trsfm
+
+        self.ctrl = ctrl_fn
+
+    def forward(self, ex: AudioTensor, mel_sp: AudioTensor):
+        assert mel_sp.hop_length == self.stft.hop_length
+        sp = mel_sp @ self.fb
+        sp = torch.transpose(torch.sqrt(sp), 1, 2).as_tensor()
+        X = self.stft(ex.as_tensor())
+        X = X[..., : sp.shape[-1]]
+        sp = sp[..., : X.shape[-1]]
+        return AudioTensor(self.istft(X * sp))

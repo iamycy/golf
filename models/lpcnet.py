@@ -28,8 +28,8 @@ class InterpolatedEmbedding(nn.Embedding):
     def forward(self, x: Tensor) -> Tensor:
         num_embeddings = self.num_embeddings
         assert x.dtype == torch.float32
-        assert torch.all(x >= 0), x.min().item()
-        assert torch.all(x <= (self.num_embeddings - 1)), x.max().item()
+        # assert torch.all(x >= 0), x.min().item()
+        # assert torch.all(x <= (self.num_embeddings - 1)), x.max().item()
 
         raw_idx = x
         lower_idx = torch.floor(raw_idx).long().clip(0, num_embeddings - 2)

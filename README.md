@@ -47,7 +47,7 @@ python test_rtf.py config.yaml checkpoint.ckpt test.wav
 ### Notebooks
 
 - [MOS](notebooks/mos.ipynb): compute MOS score given the rating file from GO Listen.
-- [time-domain l1 experiment](notebooks/time_l1.ipynb): the notebook used to conduct the time-domain L1 loss ablation study in the paper.
+- [time-domain l2 experiment](notebooks/time_l2.ipynb): the notebook used to conduct the time-domain L2 loss ablation study in the paper.
 
 ## Pre-trained Checkpoints
 

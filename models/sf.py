@@ -35,6 +35,7 @@ class SourceFilterSynth(nn.Module):
         noise_filt_params: Tuple[AudioTensor, ...],
         end_filt_params: Tuple[AudioTensor, ...],
         voicing: Optional[AudioTensor] = None,
+        target: Optional[AudioTensor] = None,
     ) -> AudioTensor:
 
         # Time-varying components
@@ -50,6 +51,9 @@ class SourceFilterSynth(nn.Module):
         if self.subtract_harmonics:
             src = src - self.noise_filter(harm_osc, *noise_filt_params)
 
+        if target is not None:
+            target_src = self.end_filter.reverse(target, *end_filt_params)
+            return src, target_src
         return self.end_filter(src, *end_filt_params)
 
     def get_split_sizes_and_trsfms(self):

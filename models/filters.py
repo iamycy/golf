@@ -7,6 +7,8 @@ from torch_fftconv.functional import fft_conv1d
 from typing import Optional, Union, List, Tuple, Callable, Any
 from diffsptk import MLSA, MelCepstralAnalysis, MelGeneralizedCepstrumToSpectrum
 
+from models.utils import AudioTensor
+
 
 from .lpc import lpc_synthesis
 from .utils import (
@@ -44,6 +46,9 @@ class FilterInterface(Controllable):
 
 class LTVFilterInterface(FilterInterface):
     def forward(self, ex: AudioTensor, *args, **kwargs) -> AudioTensor:
+        raise NotImplementedError
+
+    def reverse(self, ex: AudioTensor, *args, **kwargs) -> AudioTensor:
         raise NotImplementedError
 
 
@@ -149,6 +154,15 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
 
         # normalize
         return AudioTensor(y / norm)
+
+    def reverse(self, y: AudioTensor, gain: AudioTensor, a: AudioTensor) -> AudioTensor:
+        upsampled_a = a.reduce_hop_length().as_tensor()
+        fir = torch.cat([torch.ones_like(upsampled_a[..., :1]), upsampled_a], dim=-1)
+        y = y[:, : fir.shape[1]]
+        fir = fir[:, : y.shape[1]]
+        ex = fir_filt(y.as_tensor(), fir)
+        ex = AudioTensor(ex)
+        return ex / gain
 
 
 class LTVMinimumPhaseFIRFilterPrecise(LTVFilterInterface):

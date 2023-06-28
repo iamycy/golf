@@ -92,6 +92,7 @@ class DDSPVocoder(pl.LightningModule):
         l1_loss_weight: float = 0.0,
         f0_loss_weight: float = 1.0,
         voicing_loss_weight: float = 1.0,
+        inverse_target: bool = False,
     ):
         super().__init__()
 
@@ -116,6 +117,7 @@ class DDSPVocoder(pl.LightningModule):
         self.detach_f0 = detach_f0
         self.detach_voicing = detach_voicing
         self.train_with_true_f0 = train_with_true_f0
+        self.inverse_target = inverse_target
 
     def forward(self, feats: torch.Tensor):
         (f0, *other_params, voicing_logits) = self.encoder(feats)
@@ -181,11 +183,21 @@ class DDSPVocoder(pl.LightningModule):
         else:
             phase = f0_for_decoder / self.sample_rate
 
-        x_hat = self.decoder(
-            phase,
-            *other_params,
-            voicing=voicing,
-        ).as_tensor()
+        if self.inverse_target:
+            x_hat, invesre_x = self.decoder(
+                phase,
+                *other_params,
+                voicing=voicing,
+                target=AudioTensor(x),
+            )
+            x_hat = x_hat.as_tensor()
+            x = invesre_x.as_tensor()
+        else:
+            x_hat = self.decoder(
+                phase,
+                *other_params,
+                voicing=voicing,
+            ).as_tensor()
         # f0_hat = f0_hat.as_tensor().rename(None)
 
         x = x[..., : x_hat.shape[-1]]
@@ -234,7 +246,7 @@ class DDSPVocoder(pl.LightningModule):
 
         f0_in_hz = f0_in_hz[:, :: self.hop_length]
         f0_mask = mask[:, :: self.hop_length]
-        minimum_length = min(f0_hat.shape[1], f0_in_hz.shape[1])
+        minimum_length = min(f0_hat.shape[1], f0_in_hz.shape[1], f0_mask.shape[1])
         f0_in_hz = f0_in_hz[:, :minimum_length]
         f0_mask = f0_mask[:, :minimum_length]
         f0_hat = f0_hat[:, :minimum_length]

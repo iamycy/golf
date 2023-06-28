@@ -5,7 +5,7 @@ from torchaudio.functional import lfilter, melscale_fbanks
 from torchaudio.transforms import Spectrogram, InverseSpectrogram
 from torch_fftconv.functional import fft_conv1d
 from typing import Optional, Union, List, Tuple, Callable, Any
-from diffsptk import MLSA, MelCepstralAnalysis
+from diffsptk import MLSA, MelCepstralAnalysis, MelGeneralizedCepstrumToSpectrum
 
 
 from .lpc import lpc_synthesis
@@ -459,6 +459,67 @@ class LTVMLSAFilter(LTVFilterInterface):
         ex = ex[:, : minimum_frames * self.mlsa.frame_period]
         mc = mc[:, :minimum_frames]
         return AudioTensor(self.mlsa(ex, mc))
+
+
+class LTVMLSAFilter2(LTVMLSAFilter):
+    def __init__(
+        self,
+        n_fft: int,
+        frame_period: int,
+        filter_order: int,
+        *args,
+        window: str = "hanning",
+        alpha: float = 0,
+        gamma: float = 0,
+        **kwargs,
+    ):
+        super().__init__(
+            *args,
+            filter_order=filter_order,
+            frame_period=frame_period,
+            alpha=alpha,
+            gamma=gamma,
+            **kwargs,
+        )
+        self.stft = Spectrogram(
+            n_fft=n_fft,
+            hop_length=frame_period,
+            window_fn=get_window_fn(window),
+            power=None,
+            center=True,
+            onesided=False,
+        )
+
+        self.istft = InverseSpectrogram(
+            n_fft=n_fft,
+            hop_length=frame_period,
+            window_fn=get_window_fn(window),
+            center=True,
+            onesided=False,
+        )
+
+        self.mc2sp = MelGeneralizedCepstrumToSpectrum(
+            filter_order,
+            n_fft,
+            alpha=alpha,
+            gamma=gamma,
+            out_format="log-magnitude",
+            n_fft=n_fft,
+        )
+
+    def forward(self, ex: AudioTensor, mc: AudioTensor, **kwargs):
+        assert mc.hop_length == self.mlsa.frame_period
+        ex = ex.as_tensor()
+        mc = mc.as_tensor()
+
+        log_mag = self.mc2sp(mc)
+        log_mag = torch.cat([log_mag, log_mag.flip(-1)[..., 1:-1]], dim=-1)
+        min_phase = -hilbert(log_mag, dim=-1).imag
+        H = torch.exp(log_mag + 1j * min_phase).transpose(-1, -2)
+
+        X = self.stft(ex)[..., : H.shape[-1]]
+        H = H[..., : X.shape[-1]]
+        return AudioTensor(self.istft(X * H.conj()))
 
 
 class LTVAPFilter(LTVMLSAFilter):

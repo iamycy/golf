@@ -3,7 +3,7 @@ from lightning.pytorch.cli import LightningCLI, LightningArgumentParser
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
-from typing import List, Dict, Tuple, Callable, Union
+from typing import Any, List, Dict, Tuple, Callable, Union
 from torchaudio.transforms import MelSpectrogram
 import numpy as np
 import yaml
@@ -138,11 +138,24 @@ class LPCNetVocoder(pl.LightningModule):
         )
         return selected_log_probs.mean(), self.regularizer(e_mu)
 
+    def configure_optimizers(self) -> Any:
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3, amsgrad=True)
+        scheduler = {
+            "scheduler": torch.optim.lr_scheduler.LambdaLR(
+                optimizer, lambda step: 1 / (1 + step * 5e-5)
+            ),
+            "interval": "step",
+            "frequency": 1,
+        }
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": scheduler,
+        }
+
     def training_step(self, batch, batch_idx):
         x, _ = batch
 
         s = self.pre_emphasis(x)
-        # s = torch.clip(s, -1, 1)
         assert ~torch.any(torch.isnan(s)), "NaN in input signal"
         feats = self.feature_trsfm(x)
 
@@ -159,27 +172,31 @@ class LPCNetVocoder(pl.LightningModule):
         s = s[:, :minimum_length]
         upsampled_lpc = upsampled_lpc[:, :minimum_length]
         f = f[:, :minimum_length]
-        weight = torch.cat([torch.ones_like(upsampled_lpc[..., :1]), upsampled_lpc], 2)
-        e = fir_filt(s, weight)
-        assert ~torch.any(torch.isnan(e)), "NaN in excitation signal"
-        p = s - e
+        # weight = torch.cat([torch.ones_like(upsampled_lpc[..., :1]), upsampled_lpc], 2)
+        p = fir_filt(s[:, :-1], upsampled_lpc[:, 1:])
+        p = torch.cat([torch.zeros_like(p[:, :1]), p], 1)
+        e = s + p
 
         p_mu = self.mu_enc(p)
         e_mu = self.mu_enc(e)
         s_mu = self.mu_enc(s)
 
+        e_input = (
+            e_mu[:, :-1]
+            + torch.randn_like(e_mu[:, :-1]) / self.mu_enc.quantization_channels
+        )
+        e_target = e_mu[:, 1:]
+
         pred_e_logits = self.sample_decoder(
-            f[:, 1:], p_mu[:, 1:], s_mu[:, :-1], e_mu[:, :-1]
+            f[:, 1:], p_mu[:, 1:], s_mu[:, :-1], e_input
         )
 
-        ll, reg = self.interp_loss(e_mu[:, 1:], pred_e_logits.transpose(1, 2))
+        ll, reg = self.interp_loss(e_target, pred_e_logits.transpose(1, 2))
         loss = -ll + self.gamma * reg
 
         if self.match_lpc:
             with torch.cuda.amp.autocast(enabled=False):
-                gt_lar = self.x2lar(x.add(1e-7))[..., 1:].to(x.dtype)
-                assert ~torch.any(torch.isnan(gt_lar)), "NaN in ground truth LAR"
-                assert ~torch.any(torch.isinf(gt_lar)), "Inf in ground truth LAR"
+                gt_lar = self.x2lar(x.add(1e-7).double())[..., 1:].to(x.dtype)
             lar_l2 = F.mse_loss(lar[:, : gt_lar.shape[1]], gt_lar)
             loss += lar_l2
             self.log("train_lar_l2", lar_l2, prog_bar=False, sync_dist=True)
@@ -202,7 +219,7 @@ class LPCNetVocoder(pl.LightningModule):
         lar = f[..., : self.lpc_order].as_tensor() * 2
         lpc = self.lar2lpc(torch.cat([torch.zeros_like(lar[..., :1]), lar], 2))[..., 1:]
 
-        f = f.reduce_hop_length().as_tensor()
+        f = f.reduce_hop_length().as_tensor().tanh()
         upsampled_lpc = (
             AudioTensor(lpc, hop_length=self.hop_length).reduce_hop_length().as_tensor()
         )
@@ -210,9 +227,9 @@ class LPCNetVocoder(pl.LightningModule):
         s = s[:, :minimum_length]
         upsampled_lpc = upsampled_lpc[:, :minimum_length]
         f = f[:, :minimum_length]
-        weight = torch.cat([torch.ones_like(upsampled_lpc[..., :1]), upsampled_lpc], 2)
-        e = fir_filt(s, weight)
-        p = s - e
+        p = fir_filt(s[:, :-1], upsampled_lpc[:, 1:])
+        p = torch.cat([torch.zeros_like(p[:, :1]), p], 1)
+        e = s + p
 
         p_mu = self.mu_enc(p)
         e_mu = self.mu_enc(e)
@@ -229,7 +246,7 @@ class LPCNetVocoder(pl.LightningModule):
 
         if self.match_lpc:
             with torch.cuda.amp.autocast(enabled=False):
-                gt_lar = self.x2lar(x.add(1e-7))[..., 1:].to(x.dtype)
+                gt_lar = self.x2lar(x.add(1e-7).double())[..., 1:].to(x.dtype)
             lar_l2 = F.mse_loss(lar[:, : gt_lar.shape[1]], gt_lar)
             loss += lar_l2
             outputs += (lar_l2,)
@@ -273,9 +290,11 @@ class LPCNetVocoder(pl.LightningModule):
         feats = self.feature_trsfm(x)
 
         f = self.frame_decoder(feats)
-        lpc = rc2lpc(f[..., : self.lpc_order].as_tensor())
+        # lpc = rc2lpc(f[..., : self.lpc_order].as_tensor())
+        lar = f[..., : self.lpc_order].as_tensor() * 2
+        lpc = self.lar2lpc(torch.cat([torch.zeros_like(lar[..., :1]), lar], 2))[..., 1:]
 
-        f = f.reduce_hop_length().as_tensor()
+        f = f.reduce_hop_length().as_tensor().tanh()
         upsampled_lpc = (
             AudioTensor(lpc, hop_length=self.hop_length).reduce_hop_length().as_tensor()
         )

@@ -1,7 +1,7 @@
 # GlOttal-flow LPC Filter (GOLF)
 [![arXiv](https://img.shields.io/badge/arXiv-2306.17252-00ff00.svg)](https://arxiv.org/abs/2306.17252)
 
-The source code of the paper [Singing Voice Synthesis Using Differentiable LPC and Glottal-Flow-Inspired Wavetables](https://arxiv.org/abs/2306.17252), accepted at ISMIR 2023.
+The source code of the paper [Singing Voice Synthesis Using Differentiable LPC and Glottal-Flow-Inspired Wavetables](https://yoyololicon.github.io/golf-demo/), accepted at ISMIR 2023.
 
 ## Training
 

@@ -52,7 +52,7 @@ class SourceFilterSynth(nn.Module):
             src = src - self.noise_filter(harm_osc, *noise_filt_params)
 
         if target is not None:
-            target_src = self.end_filter.reverse(target, *end_filt_params)
+            src, target_src = self.end_filter.reverse(src, target, *end_filt_params)
             return src, target_src
         return self.end_filter(src, *end_filt_params)
 

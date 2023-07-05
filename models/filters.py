@@ -6,6 +6,8 @@ from torchaudio.transforms import Spectrogram, InverseSpectrogram
 from torch_fftconv.functional import fft_conv1d
 from typing import Optional, Union, List, Tuple, Callable, Any
 from diffsptk import MLSA, MelCepstralAnalysis, MelGeneralizedCepstrumToSpectrum
+from pysptk.synthesis import Synthesizer, AllPoleDF
+import numpy as np
 
 from models.utils import AudioTensor
 
@@ -155,14 +157,16 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
         # normalize
         return AudioTensor(y / norm)
 
-    def reverse(self, y: AudioTensor, gain: AudioTensor, a: AudioTensor) -> AudioTensor:
+    def reverse(
+        self, ex: AudioTensor, y: AudioTensor, gain: AudioTensor, a: AudioTensor
+    ) -> Tuple[AudioTensor, AudioTensor]:
         upsampled_a = a.reduce_hop_length().as_tensor()
         fir = torch.cat([torch.ones_like(upsampled_a[..., :1]), upsampled_a], dim=-1)
         y = y[:, : fir.shape[1]]
         fir = fir[:, : y.shape[1]]
-        ex = fir_filt(y.as_tensor(), fir)
-        ex = AudioTensor(ex)
-        return ex / gain
+        y_ex = fir_filt(y.as_tensor(), fir)
+        y_ex = AudioTensor(y_ex)
+        return ex * gain, y_ex
 
 
 class LTVMinimumPhaseFIRFilterPrecise(LTVFilterInterface):
@@ -362,6 +366,29 @@ class LTVZeroPhaseFIRFilter(LTVZeroPhaseFIRFilterPrecise):
             groups=kernel.shape[0] * kernel.shape[1],
         ).view(kernel.shape[0], -1)
         return AudioTensor(convolved)
+
+
+class LTVAPZeroPhaseFIRFilter(LTVZeroPhaseFIRFilter):
+    def __init__(self, window: str, conv_method: str = "direct", n_mag: int = None):
+        super().__init__(window, conv_method, n_mag)
+
+        n_fft = 2 * (n_mag - 1)
+
+        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
+            def split_and_trsfm(
+                split_sizes: Tuple[Tuple[int, ...], ...],
+                trsfm_fns: Tuple[TRSFM_TYPE, ...],
+            ):
+                split_sizes = split_sizes + ((n_mag,),)
+                trsfm_fns = trsfm_fns + (
+                    lambda x: (torch.log(torch.sigmoid(x) * n_fft**0.5),),
+                )
+                return other_split_trsfm(split_sizes, trsfm_fns)
+
+            return split_and_trsfm
+
+        if n_mag is not None:
+            self.ctrl = ctrl_fn
 
 
 class LTIRadiationFilter(FilterInterface):
@@ -628,3 +655,53 @@ class DiffWorldSPFilter(LTVFilterInterface):
         X = X[..., : sp.shape[-1]]
         sp = sp[..., : X.shape[-1]]
         return AudioTensor(self.istft(X * sp))
+
+class SampleBasedLTVMinimumPhaseFilter(LTVMinimumPhaseFilter):
+    def forward(self, ex: AudioTensor, gain: AudioTensor, a: AudioTensor):
+        assert ex.ndim == 2
+        assert gain.ndim == 2
+        assert a.ndim == 3
+        assert a.shape[1] == gain.shape[1]
+        device = ex.device
+        dtype = ex.dtype
+        hop_length = gain.hop_length
+
+        ex = ex.as_tensor()
+        gain = gain.as_tensor()
+        a = a.as_tensor()
+
+        ex = ex.cpu().numpy().astype(np.float64)
+        gain = gain.cpu().numpy().astype(np.float64)
+        a = a.cpu().numpy().astype(np.float64)
+
+        order = a.shape[-1]
+
+        synthesizer = Synthesizer(AllPoleDF(order=order), hop_length)
+        lpc_coeffs = np.concatenate([np.log(gain[..., None]), a], axis=2)
+
+        output = []
+        for i in range(ex.shape[0]):
+            y = synthesizer.synthesis(ex[i], lpc_coeffs[i])
+            output.append(y)
+
+        y = np.stack(output, axis=0)
+        return AudioTensor(torch.from_numpy(y).to(device).to(dtype))
+
+
+def convert2samplewise(config: dict):
+    for key, value in config.items():
+        if key == "class_path":
+            if ".LTVMinimumPhaseFilter" in config["class_path"]:
+                config["class_path"] = "models.filters.SampleBasedLTVMinimumPhaseFilter"
+                return config
+            elif ".LTVMinimumPhaseFIRFilter" in config["class_path"]:
+                config["class_path"] = "models.filters.LTVMinimumPhaseFIRFilterPrecise"
+                config["init_args"].pop("conv_method")
+                return config
+            elif ".LTVZeroPhaseFIRFilter" in config["class_path"]:
+                config["class_path"] = "models.filters.LTVZeroPhaseFIRFilterPrecise"
+                config["init_args"].pop("conv_method")
+                return config
+        elif isinstance(value, dict):
+            config[key] = convert2samplewise(value)
+    return config

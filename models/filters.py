@@ -656,6 +656,7 @@ class DiffWorldSPFilter(LTVFilterInterface):
         sp = sp[..., : X.shape[-1]]
         return AudioTensor(self.istft(X * sp))
 
+
 class SampleBasedLTVMinimumPhaseFilter(LTVMinimumPhaseFilter):
     def forward(self, ex: AudioTensor, gain: AudioTensor, a: AudioTensor):
         assert ex.ndim == 2
@@ -666,18 +667,17 @@ class SampleBasedLTVMinimumPhaseFilter(LTVMinimumPhaseFilter):
         dtype = ex.dtype
         hop_length = gain.hop_length
 
+        ex = ex * gain
         ex = ex.as_tensor()
-        gain = gain.as_tensor()
         a = a.as_tensor()
 
         ex = ex.cpu().numpy().astype(np.float64)
-        gain = gain.cpu().numpy().astype(np.float64)
         a = a.cpu().numpy().astype(np.float64)
 
         order = a.shape[-1]
 
         synthesizer = Synthesizer(AllPoleDF(order=order), hop_length)
-        lpc_coeffs = np.concatenate([np.log(gain[..., None]), a], axis=2)
+        lpc_coeffs = np.concatenate([np.zeros(gain.shape + (1,)), a], axis=2)
 
         output = []
         for i in range(ex.shape[0]):

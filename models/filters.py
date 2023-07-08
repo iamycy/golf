@@ -6,7 +6,7 @@ from torchaudio.transforms import Spectrogram, InverseSpectrogram
 from torch_fftconv.functional import fft_conv1d
 from typing import Optional, Union, List, Tuple, Callable, Any
 from diffsptk import MLSA, MelCepstralAnalysis, MelGeneralizedCepstrumToSpectrum
-from pysptk.synthesis import Synthesizer, AllPoleDF
+from torchlpc import sample_wise_lpc
 import numpy as np
 
 from models.utils import AudioTensor
@@ -665,27 +665,14 @@ class SampleBasedLTVMinimumPhaseFilter(LTVMinimumPhaseFilter):
         assert a.shape[1] == gain.shape[1]
         device = ex.device
         dtype = ex.dtype
-        hop_length = gain.hop_length
 
         ex = ex * gain
-        ex = ex.as_tensor()
-        a = a.as_tensor()
+        ex = ex.as_tensor().cpu()
+        a = a.reduce_hop_length().as_tensor().cpu()[:, : ex.shape[1]]
+        ex = ex[:, : a.shape[1]]
 
-        ex = ex.cpu().numpy().astype(np.float64)
-        a = a.cpu().numpy().astype(np.float64)
-
-        order = a.shape[-1]
-
-        synthesizer = Synthesizer(AllPoleDF(order=order), hop_length)
-        lpc_coeffs = np.concatenate([np.zeros(gain.shape + (1,)), a], axis=2)
-
-        output = []
-        for i in range(ex.shape[0]):
-            y = synthesizer.synthesis(ex[i], lpc_coeffs[i])
-            output.append(y)
-
-        y = np.stack(output, axis=0)
-        return AudioTensor(torch.from_numpy(y).to(device).to(dtype))
+        y = sample_wise_lpc(ex, a)
+        return AudioTensor(y.to(device).to(dtype))
 
 
 def convert2samplewise(config: dict):

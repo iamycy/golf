@@ -11,7 +11,7 @@ The source code of the paper [Singing Voice Synthesis Using Differentiable LPC a
 pip install requirements.txt
 ```
 
-2. Download the [MPop600](https://ieeexplore.ieee.org/document/9306461) dataset. The dataset is conducted in a _download-by-request_ manner. Please contact the authors or me to get the raw files.
+2. Download the [MPop600](https://ieeexplore.ieee.org/document/9306461) dataset. The dataset is conducted in a _download-by-request_ manner. Please contact their third author [Yi-Jhe Lee](mailto:neil@master-tones.com) to get the raw files.
 
 3. Resample the data to 24 kHz.
 

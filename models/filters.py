@@ -667,8 +667,8 @@ class SampleBasedLTVMinimumPhaseFilter(LTVMinimumPhaseFilter):
         dtype = ex.dtype
 
         ex = ex * gain
-        ex = ex.as_tensor().cpu()
-        a = a.reduce_hop_length().as_tensor().cpu()[:, : ex.shape[1]]
+        ex = ex.as_tensor()
+        a = a.reduce_hop_length().as_tensor()[:, : ex.shape[1]]
         ex = ex[:, : a.shape[1]]
 
         y = sample_wise_lpc(ex, a)

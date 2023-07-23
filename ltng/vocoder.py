@@ -239,6 +239,7 @@ class DDSPVocoder(pl.LightningModule):
         f0_hat = f0_hat.as_tensor()
         x_hat = x_hat.as_tensor()
 
+        x_hat = x_hat[:, : x.shape[-1]]
         x = x[..., : x_hat.shape[-1]]
         mask = mask[:, : x_hat.shape[1]]
         loss = self.criterion(x_hat, x)

@@ -5,7 +5,8 @@ from typing import Optional, Tuple
 from .synth import OscillatorInterface
 from .filters import FilterInterface, LTVFilterInterface
 from .noise import NoiseInterface
-from .utils import TimeContext, linear_upsample
+from .utils import AudioTensor
+from .ctrl import DUMMY_SPLIT_TRSFM
 
 
 class HarmonicPlusNoiseSynth(nn.Module):
@@ -30,39 +31,42 @@ class HarmonicPlusNoiseSynth(nn.Module):
 
     def forward(
         self,
-        ctx: TimeContext,
-        phase_params: Tuple[Tensor, Optional[Tensor]],
-        harm_osc_params: Tuple[Tensor, ...],
-        harm_filt_params: Tuple[Tensor, ...],
-        noise_filt_params: Tuple[Tensor, ...],
-        noise_params: Tuple[Tensor, ...] = (),
+        phase: AudioTensor,
+        harm_osc_params: Tuple[AudioTensor, ...],
+        noise_params: Tuple[AudioTensor, ...],
+        harm_filt_params: Tuple[AudioTensor, ...],
+        noise_filt_params: Tuple[AudioTensor, ...],
+        voicing: Optional[AudioTensor] = None,
     ) -> Tensor:
-        """
-        Args:
-            phase: (batch_size, samples)
-        """
-        phase, *_ = phase_params
-        assert torch.all(phase >= 0) and torch.all(phase <= 0.5)
-        upsampled_phase = linear_upsample(phase, ctx)
-
-        if len(_):
-            voicing = _[0]
-            assert torch.all(voicing >= 0) and torch.all(voicing <= 1)
-            upsampled_voicing = linear_upsample(voicing, ctx)
-            upsampled_phase = upsampled_phase * upsampled_voicing
-
         # Time-varying components
-        harm_osc = self.harm_oscillator(upsampled_phase, *harm_osc_params, ctx=ctx)
-        noise = self.noise_generator(harm_osc, *noise_params, ctx=ctx)
-        if self.harm_filter is not None:
-            harm_osc = self.harm_filter(harm_osc, *harm_filt_params, ctx=ctx)
-        if self.noise_filter is not None:
-            noise = self.noise_filter(noise, *noise_filt_params, ctx=ctx)
+        harm_osc = self.harm_oscillator(phase, *harm_osc_params)
+        if voicing is not None:
+            assert torch.all(voicing >= 0) and torch.all(voicing <= 1)
+            harm_osc = harm_osc * voicing
 
-        out = harm_osc[:, : noise.shape[1]] + noise[:, : harm_osc.shape[1]]
+        noise = self.noise_generator(harm_osc, *noise_params)
+
+        if self.harm_filter is not None:
+            harm_osc = self.harm_filter(harm_osc, *harm_filt_params)
+        if self.noise_filter is not None:
+            noise = self.noise_filter(noise, *noise_filt_params)
+
+        out = harm_osc + noise
 
         # Static components
         if self.end_filter is not None:
             return self.end_filter(out)
         else:
             return out
+
+    def get_split_sizes_and_trsfms(self):
+        ctrl_fns = [
+            self.harm_oscillator.ctrl,
+            self.noise_generator.ctrl,
+            self.harm_filter.ctrl,
+            self.noise_filter.ctrl,
+        ]
+        split_trsfm = DUMMY_SPLIT_TRSFM
+        for ctrl_fn in ctrl_fns[::-1]:
+            split_trsfm = ctrl_fn(split_trsfm)
+        return split_trsfm((), ())

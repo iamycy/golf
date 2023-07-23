@@ -78,7 +78,7 @@ class DDSPVocoderCLI(LightningCLI):
 class DDSPVocoder(pl.LightningModule):
     def __init__(
         self,
-        decoder: SourceFilterSynth,
+        decoder: Union[SourceFilterSynth, HarmonicPlusNoiseSynth],
         feature_trsfm: ScaledLogMelSpectrogram,
         criterion: nn.Module,
         encoder_class_path: str = "models.enc.VocoderParameterEncoderInterface",

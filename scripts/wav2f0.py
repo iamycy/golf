@@ -17,7 +17,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     wav_dir = pathlib.Path(args.wav_dir)
-    for wav_file in tqdm(list(wav_dir.glob("*.wav"))):
+    for wav_file in tqdm(list(wav_dir.glob("**/*.wav"))):
         x, sr = sf.read(wav_file)
         f0, _ = pw.dio(
             x,

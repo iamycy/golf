@@ -261,7 +261,6 @@ class DDSPVocoder(pl.LightningModule):
         if voicing is not None:
             voicing = voicing.as_tensor()[:, :minimum_length]
             voicing_loss = F.binary_cross_entropy(voicing, f0_mask.float())
-            self.log("val_voicing_loss", voicing_loss, prog_bar=False, sync_dist=True)
             if self.voicing_loss_weight > 0:
                 loss = loss + voicing_loss
 

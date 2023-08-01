@@ -466,16 +466,13 @@ class LTVMLSAFilter(LTVFilterInterface):
         self,
         filter_order: int,
         frame_period: int,
-        *args,
         **kwargs,
     ) -> None:
         super().__init__()
 
         self.mlsa = MLSA(
             filter_order,
-            *args,
             frame_period=frame_period,
-            cascade=True,
             **kwargs,
         )
 

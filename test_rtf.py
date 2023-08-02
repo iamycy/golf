@@ -82,6 +82,10 @@ def main():
         end = time.time()
         measurements.append(end - start)
 
+    # drop lowest and highest
+    measurements.sort()
+    measurements = measurements[1:-1]
+
     print(f"Average time: {np.mean(measurements)}")
     print(f"Real time factor: {np.mean(measurements) / args.duration}")
 

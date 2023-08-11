@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import math
 from typing import Optional, Union, List, Tuple, Callable
 
+from models.utils import AudioTensor
+
 from .utils import (
     get_transformed_lf,
     AudioTensor,
@@ -361,6 +363,41 @@ class DownsampledIndexedGlottalFlowTable(IndexedGlottalFlowTable):
         self.ctrl = ctrl_fn
 
 
+class WrappedPhaseDownsampledIndexedGlottalFlowTable(
+    DownsampledIndexedGlottalFlowTable
+):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._input_handle.remove()
+
+    def forward(
+        self,
+        wrapped_phase: AudioTensor,
+        table_select_weight: AudioTensor,
+    ) -> AudioTensor:
+        assert wrapped_phase.hop_length == 1
+        assert table_select_weight.dim() == 2
+        assert torch.all(table_select_weight >= 0) and torch.all(
+            table_select_weight <= 1
+        )
+        num_tables, table_length = self.table.shape
+        table_index_raw = table_select_weight * (num_tables - 1)
+        floor_index = table_index_raw.as_tensor().long().clip_(0, num_tables - 2)
+        p = table_index_raw - floor_index
+        p = torch.unsqueeze(p, -1)
+        interp_tables = (
+            self.table[floor_index.flatten()].view(
+                floor_index.shape[0], floor_index.shape[1], table_length
+            )
+            * (1 - p)
+            + self.table[floor_index.flatten() + 1].view(
+                floor_index.shape[0], floor_index.shape[1], table_length
+            )
+            * p
+        )
+        return self.generate(wrapped_phase, interp_tables)
+
+
 class DownsampledWeightedGlottalFlowTable(WeightedGlottalFlowTable):
     def __init__(
         self,
@@ -455,7 +492,6 @@ class SawToothOscillator(HarmonicOscillator):
         phase_offset: Optional[AudioTensor] = None,
         **kwargs,
     ) -> AudioTensor:
-
         amplitudes = self.amplitudes[None, None, :].repeat(*phase.shape, 1)
         return super().forward(phase, amplitudes, initial_phase, phase_offset)
 

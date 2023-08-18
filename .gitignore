@@ -10,3 +10,4 @@ legacy/
 wandb/
 *golf*/
 lpcnet/
+.vscode/

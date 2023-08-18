@@ -7,6 +7,7 @@ from typing import List, Dict, Tuple, Callable, Union
 from torchaudio.transforms import MelSpectrogram
 import numpy as np
 import yaml
+import math
 from importlib import import_module
 from frechet_audio_distance import FrechetAudioDistance
 
@@ -17,6 +18,7 @@ from models.ctrl import DUMMY_SPLIT_TRSFM
 from models.synth import WrappedPhaseDownsampledIndexedGlottalFlowTable
 from models.noise import NoiseInterface
 from models.filters import SampleBasedLTVMinimumPhaseFilter, LTVZeroPhaseFIRFilter
+from models.crepe import CREPE
 from .vocoder import ScaledLogMelSpectrogram
 
 
@@ -41,7 +43,7 @@ class VoiceAutoEncoder(pl.LightningModule):
         feature_trsfm: ScaledLogMelSpectrogram,
         feature_encoder_type: str,
         feature_encoder_kwargs: Dict,
-        f0_encoder: nn.Module,
+        # f0_encoder: nn.Module,
         harm_oscillator: WrappedPhaseDownsampledIndexedGlottalFlowTable,
         noise_generator: NoiseInterface,
         noise_filter: LTVZeroPhaseFIRFilter,
@@ -50,6 +52,8 @@ class VoiceAutoEncoder(pl.LightningModule):
         window: str = "hanning",
         sample_rate: int = 24000,
         hop_length: int = 120,
+        f0_min: float = 60,
+        f0_max: float = 1000,
         l1_loss_weight: float = 0.0,
         f0_loss_weight: float = 1.0,
     ):
@@ -57,7 +61,26 @@ class VoiceAutoEncoder(pl.LightningModule):
 
         self.criterion = criterion
         self.feature_trsfm = feature_trsfm
-        self.f0_encoder = f0_encoder
+        self.f0_encoder = CREPE(1, 513)
+        self.offset_downsampler = nn.Sequential(
+            nn.ReLU(),
+            nn.AvgPool1d(
+                kernel_size=17,
+                stride=8,
+                padding=8,
+            ),
+            nn.Conv1d(
+                in_channels=512,
+                out_channels=256,
+                kernel_size=1,
+            ),
+            nn.ReLU(),
+            nn.Conv1d(
+                in_channels=256,
+                out_channels=1,
+                kernel_size=1,
+            ),
+        )
 
         self.harm_oscillator = harm_oscillator
         self.noise_generator = noise_generator
@@ -88,43 +111,79 @@ class VoiceAutoEncoder(pl.LightningModule):
         self.l1_loss_weight = l1_loss_weight
         self.f0_loss_weight = f0_loss_weight
 
-    def forward(self, x: torch.Tensor):
-        wrapped_phase = self.f0_encoder(x.unsqueeze(1)).sigmoid().squeeze(1)
+        self.log_f0_min = math.log(f0_min)
+        self.log_f0_max = math.log(f0_max)
 
-        # get smooth wrapped_phase
-        pitch_mark = torch.diff(wrapped_phase, 1, 1) < -0.0
-        consecutive_pitch_mark = (pitch_mark & torch.roll(pitch_mark, 1, 1)) | (
-            pitch_mark & torch.roll(pitch_mark, 2, 1)
+    def logits2f0(self, logits: AudioTensor) -> AudioTensor:
+        return torch.exp(
+            torch.sigmoid(logits) * (self.log_f0_max - self.log_f0_min)
+            + self.log_f0_min
         )
-        pitch_mark[consecutive_pitch_mark] = False
 
-        batch_idx, time_idx = torch.nonzero(pitch_mark, as_tuple=True)
-        periods = torch.diff(time_idx)
-        valid_mask = torch.diff(batch_idx) == 0
+    def forward(self, x: torch.Tensor):
+        # wrapped_phase = self.f0_encoder(x.unsqueeze(1)).sigmoid().squeeze(1)
 
-        mark_values = wrapped_phase[batch_idx, time_idx]
-        mark_values_diff = torch.diff(mark_values) + 1
-        phase_inc = mark_values_diff / periods
+        # # get smooth wrapped_phase
+        # pitch_mark = torch.diff(wrapped_phase, 1, 1) < -0.0
+        # consecutive_pitch_mark = (pitch_mark & torch.roll(pitch_mark, 1, 1)) | (
+        #     pitch_mark & torch.roll(pitch_mark, 2, 1)
+        # )
+        # pitch_mark[consecutive_pitch_mark] = False
 
-        alter_value = []
-        for i in range(wrapped_phase.shape[0]):
-            batch_mask = batch_idx == i
-            mask_i = batch_mask[:-1] & valid_mask
-            if not torch.any(mask_i):
-                alter_value.append(wrapped_phase[i])
-                continue
-            expand_phase_inc = phase_inc[mask_i].repeat_interleave(periods[mask_i])
-            smooth_phase = (
-                torch.cumsum(expand_phase_inc, 0)
-                + mark_values[torch.nonzero(mask_i)[0]]
-            ) % 1
+        # batch_idx, time_idx = torch.nonzero(pitch_mark, as_tuple=True)
+        # periods = torch.diff(time_idx)
+        # valid_mask = torch.diff(batch_idx) == 0
 
-            alter_value_i = wrapped_phase.new_zeros(wrapped_phase.shape[1])
-            time_idx_i = time_idx[batch_mask]
-            alter_value_i[time_idx_i[0] + 1 : time_idx_i[-1]] = smooth_phase[:-1]
-            alter_value.append(alter_value_i)
+        # mark_values = wrapped_phase[batch_idx, time_idx]
+        # mark_values_diff = torch.diff(mark_values) + 1
+        # phase_inc = mark_values_diff / periods
 
-        smooth_wrapped_phase = AudioTensor(torch.stack(alter_value, 0))
+        # alter_value = []
+        # for i in range(wrapped_phase.shape[0]):
+        #     batch_mask = batch_idx == i
+        #     mask_i = batch_mask[:-1] & valid_mask
+        #     if not torch.any(mask_i):
+        #         alter_value.append(wrapped_phase[i])
+        #         continue
+        #     expand_phase_inc = phase_inc[mask_i].repeat_interleave(periods[mask_i])
+        #     smooth_phase = (
+        #         torch.cumsum(expand_phase_inc, 0)
+        #         + mark_values[torch.nonzero(mask_i)[0]]
+        #     ) % 1
+
+        #     alter_value_i = wrapped_phase.new_zeros(wrapped_phase.shape[1])
+        #     time_idx_i = time_idx[batch_mask]
+        #     alter_value_i[time_idx_i[0] + 1 : time_idx_i[-1]] = smooth_phase[:-1]
+        #     alter_value.append(alter_value_i)
+
+        # smooth_wrapped_phase = AudioTensor(torch.stack(alter_value, 0))
+
+        logits = self.f0_encoder(x.unsqueeze(1))
+        f0 = self.logits2f0(logits[..., 0])
+        phase_offset = torch.sigmoid(
+            AudioTensor(
+                self.offset_downsampler(logits[..., 1:].as_tensor().mT).mT,
+                hop_length=logits.hop_length * 8,
+            )
+        )
+        freq = (
+            (f0 / self.sample_rate)
+            .reduce_hop_length()
+            .unfold(phase_offset.hop_length, phase_offset.hop_length)
+        )
+        # freq._data = freq._data.detach()
+        padded_freq = F.pad(freq, (1, 0), "constant", 0)
+        wrapped_phase = (torch.cumsum(padded_freq, 2) + phase_offset) % 1
+        wrapped_phase, pred_next_phase = wrapped_phase[..., :-1], wrapped_phase[..., -1]
+        wrapped_phase = AudioTensor(
+            wrapped_phase.as_tensor().reshape(wrapped_phase.shape[0], -1)
+        )
+
+        phase_match_loss = (
+            torch.abs((pred_next_phase - phase_offset[:, 1:] + 0.5) % 1 - 0.5)
+            .as_tensor()
+            .mean()
+        )
 
         feats = self.feature_trsfm(x)
         logits = self.feature_encoder(feats).split(self._split_size, dim=2)
@@ -139,13 +198,13 @@ class VoiceAutoEncoder(pl.LightningModule):
             lambda x: x[0](*x[1]), zip(self.trsfms, groupped_logits)
         )
 
-        harm_osc = self.harm_oscillator(smooth_wrapped_phase, *harm_osc_params)
+        harm_osc = self.harm_oscillator(wrapped_phase, *harm_osc_params)
         src = harm_osc + self.noise_filter(
             self.noise_generator(harm_osc, *noise_params), *noise_filter_params
         )
         recon = self.end_filter(src, *end_filter_params)
 
-        return AudioTensor(wrapped_phase), smooth_wrapped_phase, recon
+        return phase_offset, f0, wrapped_phase, phase_match_loss, recon
 
     def f0_loss(self, f0_hat, f0):
         return F.l1_loss(torch.log(f0_hat + 1e-3), torch.log(f0 + 1e-3))
@@ -155,19 +214,27 @@ class VoiceAutoEncoder(pl.LightningModule):
         f0_in_hz[f0_in_hz == 0] = 1
         mask = f0_in_hz > 50
 
-        wrapped_phase, _, x_hat = self(x)
-        f0_hat = (torch.diff(wrapped_phase, dim=1) + 1) % 1 * self.sample_rate
+        *_, f0_hat, wrapped_phase, phase_match_loss, x_hat = self(x)
+        # f0_hat = (torch.diff(wrapped_phase, dim=1) + 1) % 1 * self.sample_rate
         x_hat = x_hat.as_tensor()
-        f0_hat = f0_hat.as_tensor()
+        low_res_f0 = f0_in_hz[:, :: f0_hat.hop_length]
+        low_res_mask = mask[:, :: f0_hat.hop_length]
+        f0_hat = f0_hat.as_tensor()[:, : low_res_f0.shape[-1]]
+        low_res_f0 = low_res_f0[:, : f0_hat.shape[-1]]
+        low_res_mask = low_res_mask[:, : f0_hat.shape[-1]]
 
         x = x[:, : x_hat.shape[-1]]
         mask = mask[:, : x_hat.shape[1]]
-        loss = self.criterion(x_hat, x)
+        x_hat = x_hat[:, : x.shape[1]]
+        loss = self.criterion(x_hat, x) + phase_match_loss
         l1_loss = torch.sum(mask.float() * (x_hat - x).abs()) / mask.count_nonzero()
 
-        f0_in_hz = f0_in_hz[:, : f0_hat.shape[1]]
-        f0_loss = self.f0_loss(f0_hat, f0_in_hz)
+        # f0_in_hz = f0_in_hz[:, : f0_hat.shape[1]]
+        f0_loss = self.f0_loss(f0_hat[low_res_mask], low_res_f0[low_res_mask])
 
+        self.log(
+            "train_phase_match_loss", phase_match_loss, prog_bar=True, sync_dist=True
+        )
         self.log("train_l1_loss", l1_loss, prog_bar=True, sync_dist=True)
         self.log("train_f0_loss", f0_loss, prog_bar=True, sync_dist=True)
         if self.l1_loss_weight > 0:
@@ -186,25 +253,30 @@ class VoiceAutoEncoder(pl.LightningModule):
         f0_in_hz[f0_in_hz == 0] = 1
         mask = f0_in_hz > 50
 
-        wrapped_phase, _, x_hat = self(x)
-        f0_hat = (torch.diff(wrapped_phase, dim=1) + 1) % 1 * self.sample_rate
+        *_, f0_hat, wrapped_phase, phase_match_loss, x_hat = self(x)
+        # f0_hat = (torch.diff(wrapped_phase, dim=1) + 1) % 1 * self.sample_rate
         x_hat = x_hat.as_tensor()
-        f0_hat = f0_hat.as_tensor()
+        low_res_f0 = f0_in_hz[:, :: f0_hat.hop_length]
+        low_res_mask = mask[:, :: f0_hat.hop_length]
+        f0_hat = f0_hat.as_tensor()[:, : low_res_f0.shape[-1]]
+        low_res_f0 = low_res_f0[:, : f0_hat.shape[-1]]
+        low_res_mask = low_res_mask[:, : f0_hat.shape[-1]]
 
         x = x[:, : x_hat.shape[-1]]
         mask = mask[:, : x_hat.shape[1]]
-        loss = self.criterion(x_hat, x)
+        x_hat = x_hat[:, : x.shape[1]]
+        loss = self.criterion(x_hat, x) + phase_match_loss
         l1_loss = torch.sum(mask.float() * (x_hat - x).abs()) / mask.count_nonzero()
 
-        f0_in_hz = f0_in_hz[:, : f0_hat.shape[1]]
-        f0_loss = self.f0_loss(f0_hat, f0_in_hz)
+        # f0_in_hz = f0_in_hz[:, : f0_hat.shape[1]]
+        f0_loss = self.f0_loss(f0_hat[low_res_mask], low_res_f0[low_res_mask])
 
         if self.l1_loss_weight > 0:
             loss = loss + l1_loss * self.l1_loss_weight
         if self.f0_loss_weight > 0:
             loss = loss + f0_loss * self.f0_loss_weight
 
-        self.tmp_val_outputs.append((loss, l1_loss, f0_loss))
+        self.tmp_val_outputs.append((loss, l1_loss, f0_loss, phase_match_loss))
 
         return loss
 
@@ -213,9 +285,16 @@ class VoiceAutoEncoder(pl.LightningModule):
         avg_loss = sum(x[0] for x in outputs) / len(outputs)
         avg_l1_loss = sum(x[1] for x in outputs) / len(outputs)
         avg_f0_loss = sum(x[2] for x in outputs) / len(outputs)
+        avg_phase_match_loss = sum(x[3] for x in outputs) / len(outputs)
 
         self.log("val_loss", avg_loss, prog_bar=True, sync_dist=True)
         self.log("val_l1_loss", avg_l1_loss, prog_bar=False, sync_dist=True)
         self.log("val_f0_loss", avg_f0_loss, prog_bar=False, sync_dist=True)
+        self.log(
+            "val_phase_match_loss",
+            avg_phase_match_loss,
+            prog_bar=False,
+            sync_dist=True,
+        )
 
         delattr(self, "tmp_val_outputs")

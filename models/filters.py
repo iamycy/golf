@@ -355,10 +355,11 @@ class LTVZeroPhaseFIRFilter(LTVZeroPhaseFIRFilterPrecise):
             .unfold(kernel.shape[-1] + hop_length - 1, hop_length)
             .as_tensor()
         )
-        assert (
-            unfolded.shape[1] <= kernel.shape[1]
-        ), f"{unfolded.shape} != {kernel.shape}"
+        # assert (
+        #     unfolded.shape[1] <= kernel.shape[1]
+        # ), f"{unfolded.shape} != {kernel.shape}"
         kernel = kernel.as_tensor()[:, : unfolded.shape[1]]
+        unfolded = unfolded[:, : kernel.shape[1]]
 
         convolved = self.convolve_fn(
             unfolded.reshape(1, -1, unfolded.shape[-1]),

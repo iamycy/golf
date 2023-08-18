@@ -656,6 +656,15 @@ class DiffWorldSPFilter(LTVFilterInterface):
 
 
 class SampleBasedLTVMinimumPhaseFilter(LTVMinimumPhaseFilter):
+    def __init__(
+        self,
+        lpc_order: int = None,
+        lpc_parameterisation: str = "rc2lpc",
+        max_abs_value: float = 1,
+        **kwargs,
+    ):
+        super().__init__("hanning", 1, lpc_order, lpc_parameterisation, max_abs_value)
+
     def forward(self, ex: AudioTensor, gain: AudioTensor, a: AudioTensor):
         assert ex.ndim == 2
         assert gain.ndim == 2

@@ -5,7 +5,13 @@ from torchaudio.functional import lfilter, melscale_fbanks
 from torchaudio.transforms import Spectrogram, InverseSpectrogram
 from torch_fftconv.functional import fft_conv1d
 from typing import Optional, Union, List, Tuple, Callable, Any
-from diffsptk import MLSA, MelCepstralAnalysis, MelGeneralizedCepstrumToSpectrum
+from diffsptk import (
+    MLSA,
+    MelCepstralAnalysis,
+    MelGeneralizedCepstrumToSpectrum,
+    PQMF,
+    IPQMF,
+)
 from torchlpc import sample_wise_lpc
 import numpy as np
 
@@ -52,6 +58,14 @@ class LTVFilterInterface(FilterInterface):
 
     def reverse(self, ex: AudioTensor, *args, **kwargs) -> AudioTensor:
         raise NotImplementedError
+
+
+class LTVPassThroughFilter(LTVFilterInterface):
+    def forward(self, ex: AudioTensor, *args, **kwargs) -> AudioTensor:
+        return ex
+
+    def reverse(self, ex: AudioTensor, *args, **kwargs) -> AudioTensor:
+        return ex, *args
 
 
 class LTVMinimumPhaseFilter(LTVFilterInterface):
@@ -415,6 +429,39 @@ class LTIRadiationFilter(FilterInterface):
             self._kernel,
             padding=self._padding,
         ).squeeze(1)
+
+
+class LTVPQMF(LTVFilterInterface):
+    def __init__(self, n_mag: int, filter_order: int, alpha: float = 0.0):
+        super().__init__()
+
+        self.pqmf = PQMF(n_mag, filter_order, alpha=alpha)
+        self.ipqmf = IPQMF(n_mag, filter_order, alpha=alpha)
+
+        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
+            def split_and_trsfm(
+                split_sizes: Tuple[Tuple[int, ...], ...],
+                trsfm_fns: Tuple[TRSFM_TYPE, ...],
+            ):
+                split_sizes = split_sizes + ((n_mag,),)
+                trsfm_fns = trsfm_fns + (lambda x: (x,),)
+                return other_split_trsfm(split_sizes, trsfm_fns)
+
+            return split_and_trsfm
+
+        self.ctrl = ctrl_fn
+
+    def forward(self, ex: AudioTensor, log_gain: AudioTensor):
+        gain = torch.exp(log_gain)
+        ex = ex.as_tensor().unsqueeze(1)
+        bands = fft_conv1d(self.pqmf.pad(ex), self.pqmf.filters)
+        filtered = AudioTensor(bands.mT) * gain
+        # return AudioTensor(
+        #     F.conv1d(
+        #         self.ipqmf.pad(filtered.as_tensor().mT), self.ipqmf.filters
+        #     ).squeeze(1)
+        # )
+        return torch.sum(filtered, dim=2)
 
 
 class LTIComplexConjAllpassFilter(FilterInterface):

@@ -79,6 +79,7 @@ class LJSpeechDataset(MPop600Dataset):
 class M4SingerDataset(Dataset):
     test_folder_prefixes = set(["Alto-1", "Soprano-1", "Tenor-1", "Bass-1"])
     valid_folder_prefixes = set(["Alto-2", "Alto-3", "Tenor-2", "Tenor-3"])
+    file_suffix = ".wav"
 
     def __init__(
         self,
@@ -92,7 +93,7 @@ class M4SingerDataset(Dataset):
         test_files = []
         valid_files = []
         train_files = []
-        for f in wav_dir.glob("**/*.wav"):
+        for f in wav_dir.glob("**/*" + self.file_suffix):
             parent_prefix = f.parent.name.split("#")[0]
             if parent_prefix in self.test_folder_prefixes:
                 test_files.append(f)
@@ -197,6 +198,8 @@ class VCTKDataset(M4SingerDataset):
             "p241",
         ]
     )
+
+    file_suffix = "mic1.wav"
 
 
 class MIR1K(LightningDataModule):

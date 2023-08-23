@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 from typing import Optional, Tuple
 
 from .synth import OscillatorInterface
@@ -37,11 +38,11 @@ class SourceFilterSynth(nn.Module):
         voicing: Optional[AudioTensor] = None,
         target: Optional[AudioTensor] = None,
     ) -> AudioTensor:
-
         # Time-varying components
         harm_osc = self.harm_oscillator(phase, *harm_osc_params)
         if voicing is not None:
             assert torch.all(voicing >= 0) and torch.all(voicing <= 1)
+            voicing = F.threshold(voicing, 0.5, 0)
             harm_osc = harm_osc * voicing
 
         src = harm_osc + self.noise_filter(

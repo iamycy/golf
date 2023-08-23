@@ -6,7 +6,7 @@ from .synth import OscillatorInterface
 from .filters import FilterInterface, LTVFilterInterface
 from .noise import NoiseInterface
 from .utils import AudioTensor
-from .ctrl import DUMMY_SPLIT_TRSFM
+from .ctrl import DUMMY_SPLIT_TRSFM, default_ctrl_fn
 
 
 class HarmonicPlusNoiseSynth(nn.Module):
@@ -63,9 +63,12 @@ class HarmonicPlusNoiseSynth(nn.Module):
         ctrl_fns = [
             self.harm_oscillator.ctrl,
             self.noise_generator.ctrl,
-            self.harm_filter.ctrl,
-            self.noise_filter.ctrl,
+            self.harm_filter.ctrl if self.harm_filter is not None else default_ctrl_fn,
+            self.noise_filter.ctrl
+            if self.noise_filter is not None
+            else default_ctrl_fn,
         ]
+
         split_trsfm = DUMMY_SPLIT_TRSFM
         for ctrl_fn in ctrl_fns[::-1]:
             split_trsfm = ctrl_fn(split_trsfm)

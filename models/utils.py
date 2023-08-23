@@ -175,6 +175,7 @@ class AudioTensor(object):
             torch.ge,
             torch.eq,
             torch.ne,
+            torch.where,
         ):
             audio_tensors = tuple(a for a in args if isinstance(a, AudioTensor))
             audio_tensors = AudioTensor.broadcasting(*audio_tensors)
@@ -487,7 +488,7 @@ def rc2lpc(rc: Tensor) -> Tensor:
 
 get_f0 = partial(
     pw.dio,
-    f0_floor=65,
+    # f0_floor=65,
     f0_ceil=1047,
     channels_in_octave=2,
     frame_period=5,

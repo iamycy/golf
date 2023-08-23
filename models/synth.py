@@ -469,12 +469,49 @@ class HarmonicOscillator(OscillatorInterface):
             phase = phase + initial_phase.unsqueeze(1)
 
         # anti-aliasing
-        amplitudes = torch.where(harmonics >= 0.5, 0, amplitudes.reduce_hop_length())
+        amplitudes = torch.where(harmonics >= 0.5, 0, amplitudes)
 
         # signal
         return (torch.sin(phase * 2 * torch.pi)[..., None, :] @ amplitudes[..., None])[
             ..., 0, 0
         ]
+
+
+class AdditiveSynthesizer(HarmonicOscillator):
+    def __init__(self, num_harmonics: int = 150) -> None:
+        super().__init__()
+
+        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
+            def split_and_trsfm(
+                split_sizes: Tuple[Tuple[int, ...], ...],
+                trsfm_fns: Tuple[TRSFM_TYPE, ...],
+            ):
+                split_sizes = split_sizes + (
+                    (
+                        1,
+                        num_harmonics,
+                    ),
+                )
+                trsfm_fns = trsfm_fns + (
+                    lambda log_gain, amplitudes_logits: (
+                        torch.exp(log_gain) * torch.sigmoid(amplitudes_logits),
+                    ),
+                )
+                return other_split_trsfm(split_sizes, trsfm_fns)
+
+            return split_and_trsfm
+
+        self.ctrl = ctrl_fn
+
+    def forward(
+        self,
+        phase: AudioTensor,
+        amplitudes: AudioTensor,
+        **kwargs,
+    ) -> AudioTensor:
+        num_freq_bins = 0.5 / phase
+        amplitudes = amplitudes * torch.rsqrt(num_freq_bins)
+        return super().forward(phase, amplitudes, **kwargs)
 
 
 class SawToothOscillator(HarmonicOscillator):

@@ -3,6 +3,7 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 import math
 from typing import Optional, Union, List, Tuple, Callable
+from kazane import Decimate
 
 from models.utils import AudioTensor
 
@@ -221,7 +222,7 @@ class GlottalFlowTable(OscillatorInterface):
 
 
 class IndexedGlottalFlowTable(GlottalFlowTable):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, oversampling: int = 1, **kwargs):
         super().__init__(*args, **kwargs)
 
         def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
@@ -236,6 +237,10 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
             return split_and_trsfm
 
         self.ctrl = ctrl_fn
+
+        self.oversampling = oversampling
+        if oversampling > 1:
+            self.decimater = Decimate(oversampling)
 
     def forward(
         self,
@@ -263,12 +268,24 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
             * p
         )
         # interp_tables = table_select_weight.new_tensor(interp_tables)
+        if self.oversampling > 1:
+            interp_tables = AudioTensor(
+                interp_tables.as_tensor(),
+                hop_length=interp_tables.hop_length * self.oversampling,
+            )
+            phase = AudioTensor(
+                phase.as_tensor() / self.oversampling,
+                hop_length=phase.hop_length * self.oversampling,
+            )
         upsampled_phase = phase.reduce_hop_length()
         instant_phase = torch.cumsum(upsampled_phase, 1)
         if phase_offset is not None:
             instant_phase = instant_phase + phase_offset
         wrapped_phase = instant_phase % 1
-        return self.generate(wrapped_phase, interp_tables)
+        y = self.generate(wrapped_phase, interp_tables)
+        if self.oversampling > 1:
+            y = AudioTensor(self.decimater(y.as_tensor()))
+        return y
 
 
 class WeightedGlottalFlowTable(GlottalFlowTable):

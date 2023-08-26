@@ -241,6 +241,9 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
         self.oversampling = oversampling
         if oversampling > 1:
             self.decimater = Decimate(oversampling)
+            self.decimater.register_buffer(
+                "kernel", self.decimater.kernel, persistent=False
+            )
 
     def forward(
         self,

@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchaudio.transforms import Spectrogram
 
-from models.utils import get_window_fn
+from models.utils import get_window_fn, AudioTensor
 
 
 class SSSLoss(nn.Module):
@@ -18,9 +18,9 @@ class SSSLoss(nn.Module):
         self.alpha = alpha
         self.spec = Spectrogram(power=1, window_fn=get_window_fn(window), **kwargs)
 
-    def forward(self, pred, target):
-        S_true = self.spec(target)
-        S_pred = self.spec(pred)
+    def forward(self, pred: AudioTensor, target: AudioTensor):
+        S_true = self.spec(target.as_tensor())
+        S_pred = self.spec(pred.as_tensor())
         linear_term = F.l1_loss(S_pred, S_true)
         log_term = F.l1_loss((S_true + self.eps).log2(), (S_pred + self.eps).log2())
         loss = linear_term + self.alpha * log_term
@@ -61,5 +61,5 @@ class MSSLoss(nn.Module):
         )
         self.ratio = ratio
 
-    def forward(self, x_pred, x_true):
+    def forward(self, x_pred: AudioTensor, x_true: AudioTensor):
         return self.ratio * sum(loss(x_pred, x_true) for loss in self.losses)

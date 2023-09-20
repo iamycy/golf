@@ -32,3 +32,8 @@ class Controllable(torch.nn.Module):
         super().__init__()
 
         self.ctrl = default_ctrl_fn
+
+
+class PassThrough(Controllable):
+    def forward(self, x: AudioTensor, *args, **kwargs) -> AudioTensor:
+        return x

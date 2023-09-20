@@ -1,13 +1,13 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 from .synth import OscillatorInterface
 from .filters import LTVFilterInterface
 from .noise import NoiseInterface
 from .utils import AudioTensor
-from .ctrl import SPLIT_TRSFM_SIGNATURE, DUMMY_SPLIT_TRSFM
+from .ctrl import SPLIT_TRSFM_SIGNATURE, DUMMY_SPLIT_TRSFM, PassThrough
 
 
 class SourceFilterSynth(nn.Module):
@@ -15,8 +15,8 @@ class SourceFilterSynth(nn.Module):
         self,
         harm_oscillator: OscillatorInterface,
         noise_generator: NoiseInterface,
-        noise_filter: LTVFilterInterface,
-        end_filter: LTVFilterInterface,
+        noise_filter: Union[LTVFilterInterface, PassThrough],
+        end_filter: Union[LTVFilterInterface, PassThrough],
         subtract_harmonics: bool = True,
     ):
         super().__init__()
@@ -67,4 +67,6 @@ class SourceFilterSynth(nn.Module):
         split_trsfm = DUMMY_SPLIT_TRSFM
         for ctrl_fn in ctrl_fns[::-1]:
             split_trsfm = ctrl_fn(split_trsfm)
-        return split_trsfm((), ())
+        return split_trsfm((), ()) + (
+            ("harm_osc_params", "noise_params", "noise_filt_params", "end_filt_params"),
+        )

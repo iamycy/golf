@@ -120,6 +120,24 @@ class AudioTensor(object):
     def __ne__(self, other):
         return torch.ne(self, other)
 
+    def set_hop_length(self, hop_length: int):
+        assert hop_length > 0, "hop_length must be positive"
+        if hop_length > self.hop_length:
+            assert hop_length % self.hop_length == 0
+            return self.increase_hop_length(hop_length // self.hop_length)
+        elif hop_length < self.hop_length:
+            assert self.hop_length % hop_length == 0
+            return self.reduce_hop_length(self.hop_length // hop_length)
+        return self
+
+    def increase_hop_length(self, factor: int):
+        assert factor > 0, "factor must be positive"
+        if factor == 1 or self.ndim < 2:
+            return self
+
+        data = self._data[:, ::factor]
+        return AudioTensor(data, hop_length=self.hop_length * factor)
+
     def reduce_hop_length(self, factor: int = None):
         if factor is None:
             factor = self.hop_length

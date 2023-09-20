@@ -60,14 +60,6 @@ class LTVFilterInterface(FilterInterface):
         raise NotImplementedError
 
 
-class LTVPassThroughFilter(LTVFilterInterface):
-    def forward(self, ex: AudioTensor, *args, **kwargs) -> AudioTensor:
-        return ex
-
-    def reverse(self, ex: AudioTensor, *args, **kwargs) -> AudioTensor:
-        return ex, *args
-
-
 class LTVMinimumPhaseFilter(LTVFilterInterface):
     def __init__(
         self,

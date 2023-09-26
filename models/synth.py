@@ -165,42 +165,15 @@ class GlottalFlowTable(OscillatorInterface):
             / hop_length
         )
 
-        # first, pick floor flow
-        # create dummy index to select floor flow
-        dummy_index_0 = (
-            torch.arange(batch, device=wrapped_phase.device)
-            .view(-1, 1, 1)
-            .repeat(1, wrapped_phase.shape[1], hop_length)
-            .flatten()
-        )
-        dummy_index_1 = (
-            torch.arange(wrapped_phase.shape[1], device=wrapped_phase.device)
-            .view(1, -1, 1)
-            .repeat(batch, 1, hop_length)
-            .flatten()
-        )
-        dummy_index_2 = floor_index.flatten()
         selected_floor_flow = (
-            floor_flow[dummy_index_0, dummy_index_1, dummy_index_2].view(
-                *wrapped_phase.shape
-            )
-            * (1 - p)
-            + floor_flow[dummy_index_0, dummy_index_1, dummy_index_2 + 1].view(
-                *wrapped_phase.shape
-            )
-            * p
+            floor_flow.gather(2, floor_index) * (1 - p)
+            + floor_flow.gather(2, floor_index + 1) * p
         )
 
         # second, pick ceil flow
         selected_ceil_flow = (
-            ceil_flow[dummy_index_0, dummy_index_1, dummy_index_2].view(
-                *wrapped_phase.shape
-            )
-            * (1 - p)
-            + ceil_flow[dummy_index_0, dummy_index_1, dummy_index_2 + 1].view(
-                *wrapped_phase.shape
-            )
-            * p
+            ceil_flow.gather(2, floor_index) * (1 - p)
+            + ceil_flow.gather(2, floor_index + 1) * p
         )
         final_flow = selected_floor_flow * (1 - p2) + selected_ceil_flow * p2
         final_flow = final_flow.view(batch, -1)[:, :seq_len]

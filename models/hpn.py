@@ -52,10 +52,7 @@ class HarmonicPlusNoiseSynth(nn.Module):
         out = harm_osc + noise
 
         # Static components
-        if self.end_filter is not None:
-            return self.end_filter(out)
-        else:
-            return out
+        return self.end_filter(out)
 
     def get_split_sizes_and_trsfms(self):
         ctrl_fns = [

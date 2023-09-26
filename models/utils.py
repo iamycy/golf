@@ -194,6 +194,7 @@ class AudioTensor(object):
             torch.eq,
             torch.ne,
             torch.where,
+            torch.matmul,
         ):
             audio_tensors = tuple(a for a in args if isinstance(a, AudioTensor))
             audio_tensors = AudioTensor.broadcasting(*audio_tensors)

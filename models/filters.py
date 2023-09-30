@@ -5,6 +5,7 @@ from torchaudio.functional import lfilter, melscale_fbanks
 from torchaudio.transforms import Spectrogram, InverseSpectrogram
 from torch_fftconv.functional import fft_conv1d
 from typing import Optional, Union, List, Tuple, Callable, Any
+from warnings import warn
 from diffsptk import (
     MLSA,
     MelCepstralAnalysis,
@@ -13,7 +14,7 @@ from diffsptk import (
     IPQMF,
 )
 from torchlpc import sample_wise_lpc
-import numpy as np
+
 
 from models.utils import AudioTensor
 
@@ -60,18 +61,14 @@ class LTVFilterInterface(FilterInterface):
         raise NotImplementedError
 
 
-class LTVMinimumPhaseFilter(LTVFilterInterface):
+class LTVMinimumPhaseFilterPrecise(LTVFilterInterface):
     def __init__(
         self,
-        window: str,
-        window_length: int,
         lpc_order: int = None,
         lpc_parameterisation: str = "rc2lpc",
         max_abs_value: float = 1.0,
     ):
         super().__init__()
-        window = get_window_fn(window)(window_length)
-        self.register_buffer("_kernel", torch.diag(window).unsqueeze(1))
 
         def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
             if lpc_parameterisation != "rc2lpc":
@@ -102,6 +99,36 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
             self.ctrl = ctrl_fn
 
     def forward(self, ex: AudioTensor, gain: AudioTensor, a: AudioTensor):
+        assert ex.ndim == 2
+        assert gain.ndim == 2
+        assert a.ndim == 3
+        assert a.shape[1] == gain.shape[1]
+        device = ex.device
+        dtype = ex.dtype
+
+        ex = ex * gain
+        ex = ex.as_tensor()
+        a = a.reduce_hop_length().as_tensor()[:, : ex.shape[1]]
+        ex = ex[:, : a.shape[1]]
+
+        y = sample_wise_lpc(ex, a)
+        return AudioTensor(y.to(device).to(dtype))
+
+
+class LTVMinimumPhaseFilter(LTVMinimumPhaseFilterPrecise):
+    def __init__(
+        self,
+        window: str,
+        window_length: int,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        window = get_window_fn(window)(window_length)
+        self.register_buffer(
+            "_kernel", torch.diag(window).unsqueeze(1), persistent=False
+        )
+
+    def forward(self, ex: AudioTensor, gain: AudioTensor, a: AudioTensor):
         """
         Args:
             ex (Tensor): [B, T]
@@ -109,9 +136,6 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
             a (Tensor): [B, T / hop_length, order]
             ctx (TimeContext): TimeContext
         """
-        # ex = ex.align_to("B", "T")
-        # gain = gain.align_to("B", "T")
-        # a = a.align_to("B", "T", "D")
         assert a.shape[1] == gain.shape[1]
 
         hop_length = gain.hop_length
@@ -120,13 +144,6 @@ class LTVMinimumPhaseFilter(LTVFilterInterface):
         assert window_size >= hop_length * 2, f"{window_size} < {hop_length * 2}"
         padding = window_size // 2
 
-        # interpolate gain
-        # upsampled_gain = F.interpolate(
-        #     gain.unsqueeze(1),
-        #     scale_factor=hop_length,
-        #     mode="linear",
-        #     align_corners=False,
-        # ).squeeze(1)
         ex = ex * gain
         ex = F.pad(
             ex,
@@ -411,6 +428,7 @@ class LTIRadiationFilter(FilterInterface):
             .flip(0)
             .unsqueeze(0)
             .unsqueeze(0),
+            persistent=False,
         )
         self._padding = self._kernel.size(-1) // 2
 
@@ -655,7 +673,7 @@ class DiffWorldSPFilter(LTVFilterInterface):
         super().__init__()
         fb = melscale_fbanks(n_fft // 2 + 1, f_min, f_max, n_mels, **kwargs)
         inv_fb = torch.linalg.pinv(fb).relu()
-        self.register_buffer("fb", inv_fb)
+        self.register_buffer("fb", inv_fb, persistent=False)
 
         self.stft = Spectrogram(
             n_fft=n_fft,
@@ -702,6 +720,9 @@ class SampleBasedLTVMinimumPhaseFilter(LTVMinimumPhaseFilter):
         max_abs_value: float = 1,
         **kwargs,
     ):
+        warn(
+            "SampleBasedLTVMinimumPhaseFilter is deprecated. Use LTVMinimumPhaseFilterPrecise instead."
+        )
         super().__init__("hanning", 1, lpc_order, lpc_parameterisation, max_abs_value)
 
     def forward(self, ex: AudioTensor, gain: AudioTensor, a: AudioTensor):
@@ -725,7 +746,7 @@ def convert2samplewise(config: dict):
     for key, value in config.items():
         if key == "class_path":
             if ".LTVMinimumPhaseFilter" in config["class_path"]:
-                config["class_path"] = "models.filters.SampleBasedLTVMinimumPhaseFilter"
+                config["class_path"] = "models.filters.LTVMinimumPhaseFilterPrecise"
                 return config
             elif ".LTVMinimumPhaseFIRFilter" in config["class_path"]:
                 config["class_path"] = "models.filters.LTVMinimumPhaseFIRFilterPrecise"

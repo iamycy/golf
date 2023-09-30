@@ -3,25 +3,16 @@ from lightning.pytorch.cli import LightningCLI, LightningArgumentParser
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
-from typing import List, Dict, Tuple, Callable, Union, Any
-from torchaudio.transforms import MelSpectrogram
+from typing import List, Dict, Mapping, Tuple, Callable, Union, Any
 import numpy as np
 import yaml
 import math
 from importlib import import_module
 from frechet_audio_distance import FrechetAudioDistance
 
-from models.utils import get_window_fn
-from models.mel import Mel2Control, WN
 from models.utils import AudioTensor, get_f0, freq2cent
-from models.ctrl import DUMMY_SPLIT_TRSFM
-from models.synth import WrappedPhaseDownsampledIndexedGlottalFlowTable
-from models.noise import NoiseInterface
-from models.filters import SampleBasedLTVMinimumPhaseFilter, LTVZeroPhaseFIRFilter
-from models.crepe import CREPE
 from models.sf import SourceFilterSynth
 from models.hpn import HarmonicPlusNoiseSynth
-from .vocoder import ScaledLogMelSpectrogram
 
 
 class VoiceAutoEncoderCLI(LightningCLI):
@@ -206,3 +197,6 @@ class VoiceAutoEncoder(pl.LightningModule):
             )
 
         delattr(self, "tmp_val_outputs")
+
+    def load_state_dict(self, state_dict: Mapping[str, Any], **kwargs):
+        return super().load_state_dict(state_dict, False)

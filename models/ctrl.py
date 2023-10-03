@@ -1,5 +1,6 @@
 from typing import Callable, List, Optional, Tuple, Union
 import torch
+from functools import reduce
 
 from .utils import AudioTensor
 
@@ -37,3 +38,20 @@ class Controllable(torch.nn.Module):
 class PassThrough(Controllable):
     def forward(self, x: AudioTensor, *args, **kwargs) -> AudioTensor:
         return x
+
+
+class Synth(torch.nn.Module):
+    def get_split_sizes_and_trsfms(self):
+        filtered_modules = [
+            (name, m)
+            for name, m in self.named_children()
+            if isinstance(m, Controllable)
+        ]
+        param_keys = map(lambda x: x[0] + "_params", filtered_modules)
+
+        split_trsfm = reduce(
+            lambda x, f: f(x),
+            map(lambda x: x[1].ctrl, filtered_modules[::-1]),
+            DUMMY_SPLIT_TRSFM,
+        )
+        return split_trsfm((), ()) + (tuple(param_keys),)

@@ -1,15 +1,14 @@
 import torch
-from torch import nn, Tensor
 from typing import Optional, Tuple, Union, List, Callable, Any
 
 from .synth import OscillatorInterface
 from .filters import FilterInterface, LTVFilterInterface
 from .noise import NoiseInterface
 from .utils import AudioTensor
-from .ctrl import DUMMY_SPLIT_TRSFM, default_ctrl_fn, PassThrough
+from .ctrl import PassThrough, Synth
 
 
-class HarmonicPlusNoiseSynth(nn.Module):
+class HarmonicPlusNoiseSynth(Synth):
     def __init__(
         self,
         harm_oscillator: OscillatorInterface,
@@ -32,44 +31,25 @@ class HarmonicPlusNoiseSynth(nn.Module):
     def forward(
         self,
         phase: AudioTensor,
-        harm_osc_params: Tuple[AudioTensor, ...],
-        noise_params: Tuple[AudioTensor, ...],
-        harm_filt_params: Tuple[AudioTensor, ...],
-        noise_filt_params: Tuple[AudioTensor, ...],
+        harm_oscillator_params: Tuple[AudioTensor, ...],
+        noise_generator_params: Tuple[AudioTensor, ...],
+        harm_filter_params: Tuple[AudioTensor, ...],
+        noise_filter_params: Tuple[AudioTensor, ...],
         voicing: Optional[AudioTensor] = None,
+        **other_params
     ) -> AudioTensor:
         # Time-varying components
-        harm_osc = self.harm_oscillator(phase, *harm_osc_params)
+        harm_osc = self.harm_oscillator(phase, *harm_oscillator_params)
         if voicing is not None:
             assert torch.all(voicing >= 0) and torch.all(voicing <= 1)
             harm_osc = harm_osc * voicing
 
-        noise = self.noise_generator(harm_osc, *noise_params)
+        noise = self.noise_generator(harm_osc, *noise_generator_params)
 
-        harm_osc = self.harm_filter(harm_osc, *harm_filt_params)
-        noise = self.noise_filter(noise, *noise_filt_params)
+        harm_osc = self.harm_filter(harm_osc, *harm_filter_params)
+        noise = self.noise_filter(noise, *noise_filter_params)
 
         out = harm_osc + noise
 
         # Static components
         return self.end_filter(out)
-
-    def get_split_sizes_and_trsfms(self):
-        ctrl_fns = [
-            self.harm_oscillator.ctrl,
-            self.noise_generator.ctrl,
-            self.harm_filter.ctrl,
-            self.noise_filter.ctrl,
-        ]
-
-        split_trsfm = DUMMY_SPLIT_TRSFM
-        for ctrl_fn in ctrl_fns[::-1]:
-            split_trsfm = ctrl_fn(split_trsfm)
-        return split_trsfm((), ()) + (
-            (
-                "harm_osc_params",
-                "noise_params",
-                "harm_filt_params",
-                "noise_filt_params",
-            ),
-        )

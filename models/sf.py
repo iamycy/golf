@@ -7,10 +7,10 @@ from .synth import OscillatorInterface
 from .filters import LTVFilterInterface
 from .noise import NoiseInterface
 from .utils import AudioTensor
-from .ctrl import SPLIT_TRSFM_SIGNATURE, DUMMY_SPLIT_TRSFM, PassThrough
+from .ctrl import PassThrough, Synth
 
 
-class SourceFilterSynth(nn.Module):
+class SourceFilterSynth(Synth):
     def __init__(
         self,
         harm_oscillator: OscillatorInterface,
@@ -31,42 +31,29 @@ class SourceFilterSynth(nn.Module):
     def forward(
         self,
         phase: AudioTensor,
-        harm_osc_params: Tuple[AudioTensor, ...],
-        noise_params: Tuple[AudioTensor, ...],
-        noise_filt_params: Tuple[AudioTensor, ...],
-        end_filt_params: Tuple[AudioTensor, ...],
+        harm_oscillator_params: Tuple[AudioTensor, ...],
+        noise_generator_params: Tuple[AudioTensor, ...],
+        noise_filter_params: Tuple[AudioTensor, ...],
+        end_filter_params: Tuple[AudioTensor, ...],
         voicing: Optional[AudioTensor] = None,
         target: Optional[AudioTensor] = None,
     ) -> AudioTensor:
         # Time-varying components
-        harm_osc = self.harm_oscillator(phase, *harm_osc_params)
+        harm_osc = self.harm_oscillator(phase, *harm_oscillator_params)
         if voicing is not None:
             assert torch.all(voicing >= 0) and torch.all(voicing <= 1)
             voicing = F.threshold(voicing, 0.5, 0)
             harm_osc = harm_osc * voicing
 
         src = harm_osc + self.noise_filter(
-            self.noise_generator(harm_osc, *noise_params), *noise_filt_params
+            self.noise_generator(harm_osc, *noise_generator_params),
+            *noise_filter_params
         )
 
         if self.subtract_harmonics:
-            src = src - self.noise_filter(harm_osc, *noise_filt_params)
+            src = src - self.noise_filter(harm_osc, *noise_filter_params)
 
         if target is not None:
-            src, target_src = self.end_filter.reverse(src, target, *end_filt_params)
+            src, target_src = self.end_filter.reverse(src, target, *end_filter_params)
             return src, target_src
-        return self.end_filter(src, *end_filt_params)
-
-    def get_split_sizes_and_trsfms(self):
-        ctrl_fns = [
-            self.harm_oscillator.ctrl,
-            self.noise_generator.ctrl,
-            self.noise_filter.ctrl,
-            self.end_filter.ctrl,
-        ]
-        split_trsfm = DUMMY_SPLIT_TRSFM
-        for ctrl_fn in ctrl_fns[::-1]:
-            split_trsfm = ctrl_fn(split_trsfm)
-        return split_trsfm((), ()) + (
-            ("harm_osc_params", "noise_params", "noise_filt_params", "end_filt_params"),
-        )
+        return self.end_filter(src, *end_filter_params)

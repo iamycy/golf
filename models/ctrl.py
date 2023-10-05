@@ -1,6 +1,7 @@
 from typing import Callable, List, Optional, Tuple, Union
 import torch
 from functools import reduce
+from itertools import starmap
 
 from .utils import AudioTensor
 
@@ -42,16 +43,11 @@ class PassThrough(Controllable):
 
 class Synth(torch.nn.Module):
     def get_split_sizes_and_trsfms(self):
-        filtered_modules = [
-            (name, m)
-            for name, m in self.named_children()
-            if isinstance(m, Controllable)
-        ]
-        param_keys = map(lambda x: x[0] + "_params", filtered_modules)
-
-        split_trsfm = reduce(
-            lambda x, f: f(x),
-            map(lambda x: x[1].ctrl, filtered_modules[::-1]),
-            DUMMY_SPLIT_TRSFM,
+        filtered_modules = list(
+            filter(lambda x: isinstance(x[1], Controllable), self.named_children())
         )
-        return split_trsfm((), ()) + (tuple(param_keys),)
+        return reduce(
+            lambda x, f: f(x),
+            starmap(lambda _, x: x.ctrl, reversed(filtered_modules)),
+            DUMMY_SPLIT_TRSFM,
+        )((), ()) + (tuple(starmap(lambda x, _: x + "_params", filtered_modules)),)

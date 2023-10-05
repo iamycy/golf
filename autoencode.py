@@ -26,4 +26,5 @@ if __name__ == "__main__":
         },
         save_config_callback=MyConfigCallback,
         save_config_kwargs={"overwrite": True},
+        parser_kwargs={"parser_mode": "omegaconf"},
     )

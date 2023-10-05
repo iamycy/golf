@@ -33,7 +33,7 @@ from .utils import (
     get_logits2biquads,
     biquads2lpc,
 )
-from .ctrl import Controllable, TRSFM_TYPE, SPLIT_TRSFM_SIGNATURE
+from .ctrl import Controllable, wrap_ctrl_fn
 
 __all__ = [
     "FilterInterface",
@@ -70,33 +70,22 @@ class LTVMinimumPhaseFilterPrecise(LTVFilterInterface):
     ):
         super().__init__()
 
-        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
-            if lpc_parameterisation != "rc2lpc":
-                logits2biquads = get_logits2biquads(lpc_parameterisation, max_abs_value)
-                logits2lpc = lambda logits: biquads2lpc(
-                    logits2biquads(logits.view(logits.shape[0], logits.shape[1], -1, 2))
-                )
-            else:
-                logits2lpc = lambda logits: rc2lpc(logits.tanh() * max_abs_value)
-
-            def split_and_trsfm(
-                split_sizes: Tuple[Tuple[int, ...], ...],
-                trsfm_fns: Tuple[TRSFM_TYPE, ...],
-            ):
-                split_sizes = split_sizes + ((1, lpc_order),)
-
-                def trsfm_fn(log_gain: AudioTensor, lpc_logits: AudioTensor):
-                    gain = torch.exp(log_gain)
-                    a = lpc_logits.new_tensor(logits2lpc(lpc_logits.as_tensor()))
-                    return gain, a
-
-                trsfm_fns = trsfm_fns + (trsfm_fn,)
-                return other_split_trsfm(split_sizes, trsfm_fns)
-
-            return split_and_trsfm
+        if lpc_parameterisation != "rc2lpc":
+            logits2biquads = get_logits2biquads(lpc_parameterisation, max_abs_value)
+            logits2lpc = lambda logits: biquads2lpc(
+                logits2biquads(logits.view(logits.shape[0], logits.shape[1], -1, 2))
+            )
+        else:
+            logits2lpc = lambda logits: rc2lpc(logits.tanh() * max_abs_value)
 
         if lpc_order is not None:
-            self.ctrl = ctrl_fn
+            self.ctrl = wrap_ctrl_fn(
+                split_size=(1, lpc_order),
+                trsfm_fn=lambda log_gain, lpc_logits: (
+                    torch.exp(log_gain),
+                    lpc_logits.new_tensor(logits2lpc(lpc_logits.as_tensor())),
+                ),
+            )
 
     def forward(self, ex: AudioTensor, gain: AudioTensor, a: AudioTensor):
         assert ex.ndim == 2
@@ -285,19 +274,8 @@ class LTVZeroPhaseFIRFilterPrecise(LTVFilterInterface):
         super().__init__()
         self.window_fn = get_window_fn(window)
 
-        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
-            def split_and_trsfm(
-                split_sizes: Tuple[Tuple[int, ...], ...],
-                trsfm_fns: Tuple[TRSFM_TYPE, ...],
-            ):
-                split_sizes = split_sizes + ((n_mag,),)
-                trsfm_fns = trsfm_fns + (lambda x: (x,),)
-                return other_split_trsfm(split_sizes, trsfm_fns)
-
-            return split_and_trsfm
-
         if n_mag is not None:
-            self.ctrl = ctrl_fn
+            self.ctrl = wrap_ctrl_fn(split_size=(n_mag,), trsfm_fn=lambda x: (x,))
 
     @staticmethod
     def get_zero_phase_fir(log_mag: Tensor):
@@ -398,21 +376,11 @@ class LTVAPZeroPhaseFIRFilter(LTVZeroPhaseFIRFilter):
 
         n_fft = 2 * (n_mag - 1)
 
-        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
-            def split_and_trsfm(
-                split_sizes: Tuple[Tuple[int, ...], ...],
-                trsfm_fns: Tuple[TRSFM_TYPE, ...],
-            ):
-                split_sizes = split_sizes + ((n_mag,),)
-                trsfm_fns = trsfm_fns + (
-                    lambda x: (torch.log(torch.sigmoid(x) * n_fft**0.5),),
-                )
-                return other_split_trsfm(split_sizes, trsfm_fns)
-
-            return split_and_trsfm
-
         if n_mag is not None:
-            self.ctrl = ctrl_fn
+            self.ctrl = wrap_ctrl_fn(
+                split_size=(n_mag,),
+                trsfm_fn=lambda x: (torch.log(torch.sigmoid(x) * n_fft**0.5),),
+            )
 
 
 class LTIRadiationFilter(FilterInterface):
@@ -448,18 +416,10 @@ class LTVPQMF(LTVFilterInterface):
         self.pqmf = PQMF(n_mag, filter_order, alpha=alpha)
         self.ipqmf = IPQMF(n_mag, filter_order, alpha=alpha)
 
-        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
-            def split_and_trsfm(
-                split_sizes: Tuple[Tuple[int, ...], ...],
-                trsfm_fns: Tuple[TRSFM_TYPE, ...],
-            ):
-                split_sizes = split_sizes + ((n_mag,),)
-                trsfm_fns = trsfm_fns + (lambda x: (x,),)
-                return other_split_trsfm(split_sizes, trsfm_fns)
-
-            return split_and_trsfm
-
-        self.ctrl = ctrl_fn
+        self.ctrl = wrap_ctrl_fn(
+            split_size=(n_mag,),
+            trsfm_fn=lambda x: (x,),
+        )
 
     def forward(self, ex: AudioTensor, log_gain: AudioTensor):
         gain = torch.exp(log_gain)
@@ -534,18 +494,10 @@ class LTVMLSAFilter(LTVFilterInterface):
             **kwargs,
         )
 
-        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
-            def split_and_trsfm(
-                split_sizes: Tuple[Tuple[int, ...], ...],
-                trsfm_fns: Tuple[TRSFM_TYPE, ...],
-            ):
-                split_sizes = split_sizes + ((filter_order + 1,),)
-                trsfm_fns = trsfm_fns + (lambda x: (x,),)
-                return other_split_trsfm(split_sizes, trsfm_fns)
-
-            return split_and_trsfm
-
-        self.ctrl = ctrl_fn
+        self.ctrl = wrap_ctrl_fn(
+            split_size=(filter_order + 1,),
+            trsfm_fn=lambda x: (x,),
+        )
 
     def forward(self, ex: AudioTensor, mc: AudioTensor, **kwargs):
         assert mc.hop_length == self.mlsa.frame_period
@@ -642,20 +594,10 @@ class LTVAPFilter(LTVMLSAFilter):
         n_fft = n_mag * 2 - 2
         self.mcep = MelCepstralAnalysis(filter_order, n_fft, alpha=alpha, gamma=gamma)
 
-        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
-            def split_and_trsfm(
-                split_sizes: Tuple[Tuple[int, ...], ...],
-                trsfm_fns: Tuple[TRSFM_TYPE, ...],
-            ):
-                split_sizes = split_sizes + ((n_mag,),)
-                trsfm_fns = trsfm_fns + (
-                    lambda x: (x.new_tensor(self.mcep(torch.sigmoid(x.as_tensor()))),),
-                )
-                return other_split_trsfm(split_sizes, trsfm_fns)
-
-            return split_and_trsfm
-
-        self.ctrl = ctrl_fn
+        self.ctrl = wrap_ctrl_fn(
+            split_size=(n_mag,),
+            trsfm_fn=lambda x: (x.new_tensor(self.mcep(torch.sigmoid(x.as_tensor()))),),
+        )
 
 
 class DiffWorldSPFilter(LTVFilterInterface):
@@ -689,18 +631,10 @@ class DiffWorldSPFilter(LTVFilterInterface):
             center=center,
         )
 
-        def ctrl_fn(other_split_trsfm: SPLIT_TRSFM_SIGNATURE):
-            def split_and_trsfm(
-                split_sizes: Tuple[Tuple[int, ...], ...],
-                trsfm_fns: Tuple[TRSFM_TYPE, ...],
-            ):
-                split_sizes = split_sizes + ((n_mels,),)
-                trsfm_fns = trsfm_fns + (lambda x: (torch.exp(x),),)
-                return other_split_trsfm(split_sizes, trsfm_fns)
-
-            return split_and_trsfm
-
-        self.ctrl = ctrl_fn
+        self.ctrl = wrap_ctrl_fn(
+            split_size=(n_mels,),
+            trsfm_fn=lambda x: (torch.exp(x),),
+        )
 
     def forward(self, ex: AudioTensor, mel_sp: AudioTensor):
         assert mel_sp.hop_length == self.stft.hop_length

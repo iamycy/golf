@@ -1,7 +1,8 @@
 import soundfile as sf
 import shutil
 
-import samplerate
+# import samplerate
+import soxr
 
 # import resampy
 from tqdm import tqdm
@@ -26,5 +27,6 @@ for f in tqdm(list(src.glob("**/*" + args.suffix))):
         shutil.copy2(f, output_name)
         continue
     x, sr = sf.read(f)
-    x = samplerate.resample(x, args.sr / sr, verbose=True)
+    # x = samplerate.resample(x, args.sr / sr, verbose=True)
+    x = soxr.resample(x, sr, args.sr)
     sf.write(output_name, x, args.sr)

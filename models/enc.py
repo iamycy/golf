@@ -44,33 +44,32 @@ class VocoderParameterEncoderInterface(nn.Module):
         **kwargs,
     ):
         super().__init__()
-        self.split_sizes = split_sizes
-        self.trsfms = trsfms
-        self.args_keys = args_keys
-        concated_split_sizes = sum(split_sizes, ())
-        if learn_voicing:
-            concated_split_sizes = (1,) + concated_split_sizes
-        if learn_f0:
-            concated_split_sizes = (1,) + concated_split_sizes
-        self._split_size = concated_split_sizes
-        self.learn_voicing = learn_voicing
-        self.learn_f0 = learn_f0
-        self.log_f0_min = math.log(f0_min)
-        self.log_f0_max = math.log(f0_max)
+
+        append_before = lambda x, cond, y: (y,) + x if cond else x
+        append_one = lambda x, cond: append_before(x, cond, (1,))
+
+        self.split_sizes = append_one(append_one(split_sizes, learn_voicing), learn_f0)
+        self.trsfms = append_before(
+            append_before(trsfms, learn_voicing, lambda x: x),
+            learn_f0,
+            lambda logits: torch.exp(
+                torch.sigmoid(logits) * (math.log(f0_max) - math.log(f0_min))
+                + math.log(f0_min)
+            ),
+        )
+        self.args_keys = append_before(
+            append_before(args_keys, learn_voicing, "voicing_logits"),
+            learn_f0,
+            "f0",
+        )
 
         module_path, class_name = backbone_type.rsplit(".", 1)
         module = import_module(module_path)
 
         self.backbone = getattr(module, class_name)(
-            out_channels=sum(self._split_size), **kwargs
+            out_channels=sum(sum(split_sizes, ())), **kwargs
         )
         # self.backbone = torch.compile(self.backbone)
-
-    def logits2f0(self, logits: AudioTensor) -> AudioTensor:
-        return torch.exp(
-            torch.sigmoid(logits) * (self.log_f0_max - self.log_f0_min)
-            + self.log_f0_min
-        )
 
     def forward(
         self, x: AudioTensor, *args: Any, **kwargs: Any
@@ -78,36 +77,26 @@ class VocoderParameterEncoderInterface(nn.Module):
         h = self.backbone(x, *args, **kwargs)
         logits = [
             h.new_tensor(torch.squeeze(t, 2))
-            for t in torch.split(h, self._split_size, dim=2)
+            for t in torch.split(h, sum(self.split_sizes, ()), dim=2)
         ]
-        params = {}
-        if self.learn_f0:
-            f0_logits, *logits = logits
-            params["f0"] = self.logits2f0(f0_logits)
-
-        if self.learn_voicing:
-            voicing_logits, *logits = logits
-            params["voicing_logits"] = voicing_logits
-
-        params.update(
-            dict(
-                zip(
-                    self.args_keys,
-                    map(
-                        lambda f, args: f(*args),
-                        self.trsfms,
-                        (
-                            logits[i:j]
-                            for i, j in pairwise(
-                                accumulate(
-                                    map(lambda x: len(x), self.split_sizes), initial=0
-                                )
+        params = dict(
+            zip(
+                self.args_keys,
+                map(
+                    lambda f, args: f(*args),
+                    self.trsfms,
+                    (
+                        logits[i:j]
+                        for i, j in pairwise(
+                            accumulate(
+                                map(lambda x: len(x), self.split_sizes), initial=0
                             )
-                        ),
+                        )
                     ),
-                )
+                ),
             )
         )
+
         return params
 
 

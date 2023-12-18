@@ -5,6 +5,7 @@ import pyworld as pw
 from functools import partial
 import torch.nn.functional as F
 import math
+from scipy.signal import get_window
 from typing import Any, Callable, Optional, Tuple, Union, List
 
 
@@ -339,7 +340,10 @@ def get_window_fn(window: str = "hann"):
     elif window == "bartlett":
         return torch.bartlett_window
     else:
-        raise ValueError(f"Unknown window function {window}")
+        try:
+            return lambda n: torch.tensor(get_window(window, n))
+        except:
+            raise ValueError(f"Unknown window function {window}")
 
 
 def fir_filt(x: torch.Tensor, h: torch.Tensor):

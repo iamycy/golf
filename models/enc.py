@@ -4,15 +4,9 @@ import math
 from importlib import import_module
 from typing import Optional, Union, List, Tuple, Callable, Any, Dict
 from torchaudio.transforms import Spectrogram
-from itertools import accumulate, tee
+from itertools import accumulate, pairwise
 
 from .utils import get_logits2biquads, biquads2lpc, AudioTensor, rc2lpc, get_window_fn
-
-
-def pairwise(iterable):
-    a, b = tee(iterable)
-    next(b, None)
-    return zip(a, b)
 
 
 class BackboneModelInterface(nn.Module):

@@ -67,7 +67,7 @@ class VocoderParameterEncoderInterface(nn.Module):
         module = import_module(module_path)
 
         self.backbone = getattr(module, class_name)(
-            out_channels=sum(sum(split_sizes, ())), **kwargs
+            out_channels=sum(sum(self.split_sizes, ())), **kwargs
         )
         # self.backbone = torch.compile(self.backbone)
 

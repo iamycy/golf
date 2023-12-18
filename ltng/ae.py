@@ -41,7 +41,7 @@ class VoiceAutoEncoder(pl.LightningModule):
 
         module_path, class_name = encoder_class_path.rsplit(".", 1)
         module = import_module(module_path)
-        split_sizes, trsfms, args_keys = self.decoder.get_split_sizes_and_trsfms()
+        split_sizes, trsfms, args_keys = self.decoder.split_sizes_and_trsfms
         self.encoder = getattr(module, class_name)(
             split_sizes=split_sizes,
             trsfms=trsfms,

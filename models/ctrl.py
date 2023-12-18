@@ -57,7 +57,8 @@ class PassThrough(Controllable):
 
 
 class Synth(torch.nn.Module):
-    def get_split_sizes_and_trsfms(self):
+    @property
+    def split_sizes_and_trsfms(self):
         filtered_modules = list(
             filter(lambda x: isinstance(x[1], Controllable), self.named_children())
         )

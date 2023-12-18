@@ -316,6 +316,46 @@ def get_transformed_lf(
     return torch.cat([before, after])
 
 
+def get_transformed_lf_v2(Rd: torch.Tensor, points: int = 1024):
+    # the implementation is adapted from https://github.com/dsuedholt/vocal-tract-grad/blob/main/glottis.py
+    # Ra, Rk, and Rg are called R parameters in glottal flow modeling
+    # We can infer the values of Ra, Rk, and Rg from Rd
+    Rd = torch.as_tensor(Rd).view(-1, 1)
+    Ra = -0.01 + 0.048 * Rd
+    Rk = 0.224 + 0.118 * Rd
+    Rg = (Rk / 4) * (0.5 + 1.2 * Rk) / (0.11 * Rd - Ra * (0.5 + 1.2 * Rk))
+
+    # convert R parameters to Ta, Tp, and Te
+    # Ta: The return phase duration
+    # Tp: Time of the maximum of the pulse
+    # Te: Time of the minimum of the time-derivative of the pulse
+    Ta = Ra
+    Tp = 1 / (2 * Rg)
+    Te = Tp + Tp * Rk
+
+    epsilon = 1 / Ta
+    shift = torch.exp(-epsilon * (1 - Te))
+    delta = 1 - shift
+
+    rhs_integral = (1 / epsilon) * (shift - 1) + (1 - Te) * shift
+    rhs_integral /= delta
+
+    lower_integral = -(Te - Tp) / 2 + rhs_integral
+    upper_integral = -lower_integral
+
+    omega = torch.pi / Tp
+    s = torch.sin(omega * Te)
+    y = -torch.pi * s * upper_integral / (Tp * 2)
+    z = torch.log(y)
+    alpha = z / (Tp / 2 - Te)
+    EO = -1 / (s * torch.exp(alpha * Te))
+
+    t = torch.linspace(0, 1, points + 1)[None, :-1]
+    before = EO * torch.exp(alpha * t) * torch.sin(omega * t)
+    after = (-torch.exp(-epsilon * (t - Te)) + shift) / delta
+    return torch.where(t < Te, before, after).squeeze()
+
+
 def get_radiation_time_filter(
     num_zeros: int = 16, window_fn: Callable[[int], torch.Tensor] = None
 ):

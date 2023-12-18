@@ -9,6 +9,7 @@ from models.utils import AudioTensor
 
 from .utils import (
     get_transformed_lf,
+    get_transformed_lf_v2,
     AudioTensor,
 )
 from .ctrl import Controllable, wrap_ctrl_fn
@@ -65,6 +66,7 @@ class GlottalFlowTable(OscillatorInterface):
         trainable: bool = False,
         min_R_d: float = 0.3,
         max_R_d: float = 2.7,
+        lf_v2: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -74,11 +76,14 @@ class GlottalFlowTable(OscillatorInterface):
             torch.exp(torch.linspace(math.log(min_R_d), math.log(max_R_d), table_size)),
         )
 
-        table = []
-        for R_d in self.R_d_values:
-            table.append(get_transformed_lf(R_d=R_d, **kwargs))
+        if lf_v2:
+            table = get_transformed_lf_v2(self.R_d_values, **kwargs)
+        else:
+            table = []
+            for R_d in self.R_d_values:
+                table.append(get_transformed_lf(R_d=R_d, **kwargs))
+            table = torch.stack(table)
 
-        table = torch.stack(table)
         if table_type == "flow":
             table = table.cumsum(dim=1)
         elif table_type == "derivative":

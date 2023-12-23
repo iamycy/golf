@@ -60,8 +60,9 @@ class VoiceAutoEncoder(pl.LightningModule):
         self,
         x: AudioTensor = None,
         f0: AudioTensor = None,
-        params: Dict[str, Union[AudioTensor, Tuple[AudioTensor]]] = {},
+        params: Dict[str, Union[AudioTensor, Tuple[AudioTensor]]] = None,
     ) -> Tuple[AudioTensor, Dict[str, Union[AudioTensor, Tuple[AudioTensor]]]]:
+        params = {} if params is None else params
         if x is not None:
             enc_params: Dict = self.encoder(x, f0=f0)
             params.update(enc_params)
@@ -92,7 +93,11 @@ class VoiceAutoEncoder(pl.LightningModule):
         f0_hat = params.pop("f0", None)
 
         if self.train_with_true_f0:
-            phase = torch.where(f0_in_hz == 0, 150, f0_in_hz) / self.sample_rate
+            # phase = torch.where(f0_in_hz == 0, 150, f0_in_hz) / self.sample_rate
+            random_f0 = (
+                f0_in_hz.as_tensor().new_empty(f0_in_hz.shape[0], 1).uniform_(50, 500)
+            )
+            phase = torch.where(f0_in_hz == 0, random_f0, f0_in_hz) / self.sample_rate
         elif self.detach_f0:
             phase = f0_hat.new_tensor(f0_hat.as_tensor().detach()) / self.sample_rate
         else:

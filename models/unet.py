@@ -40,12 +40,14 @@ class UNetEncoder(BackboneModelInterface):
         include_env_features: bool = False,
         num_harmonics: int = 150,
         sample_rate: int = 22050,
+        f0_conditioning: bool = True,
         **lstm_kwargs,
     ):
         super().__init__(lstm_hidden_size * 2, out_channels)
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.spectrogram = Spectrogram(n_fft=n_fft, hop_length=hop_length, center=True)
+        self.f0_conditioning = f0_conditioning
 
         in_channels = 1 if not include_env_features else 4
         blocks = []
@@ -71,7 +73,7 @@ class UNetEncoder(BackboneModelInterface):
 
         self.cnns = nn.Sequential(*blocks)
         self.lstm = nn.LSTM(
-            flatten_size + 1,
+            flatten_size + 1 if f0_conditioning else flatten_size,
             lstm_hidden_size,
             batch_first=True,
             bidirectional=True,
@@ -86,12 +88,13 @@ class UNetEncoder(BackboneModelInterface):
         self.num_harmonics = num_harmonics
         self.sr = sample_rate
 
-    def forward(self, x: AudioTensor, f0: AudioTensor) -> AudioTensor:
+    def forward(self, x: AudioTensor, f0: AudioTensor = None) -> AudioTensor:
         assert x.hop_length == 1
         spec = self.spectrogram(x.as_tensor())
-        f0 = f0.set_hop_length(self.hop_length).truncate(spec.size(2)).as_tensor()
-        spec = spec[..., : f0.size(-1)]
-        if self.include_env_features:
+        if self.f0_conditioning and f0 is not None:
+            f0 = f0.set_hop_length(self.hop_length).truncate(spec.size(2)).as_tensor()
+            spec = spec[..., : f0.size(-1)]
+        if self.include_env_features and self.f0_conditioning:
             spec = spec.mT
             intervals = self.sr / self.n_fft
             freqs = torch.arange(0, self.n_fft // 2 + 1, device=spec.device) * intervals
@@ -148,7 +151,8 @@ class UNetEncoder(BackboneModelInterface):
 
         h = self.cnns(feature)
         h = torch.flatten(h, 1, 2).mT
-        h = torch.cat([h, torch.log1p(f0).unsqueeze(-1)], dim=-1)
+        if self.f0_conditioning and f0 is not None:
+            h = torch.cat([h, torch.log1p(f0).unsqueeze(-1)], dim=-1)
         h = self.lstm(h)[0]
         h = self.norm(h)
         return AudioTensor(super().forward(h), hop_length=self.hop_length)

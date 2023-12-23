@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchaudio.transforms import Spectrogram
+from typing import Optional, Tuple, Union, List, Callable, Any
 
 from models.utils import get_window_fn, AudioTensor
 
@@ -63,3 +64,56 @@ class MSSLoss(nn.Module):
 
     def forward(self, x_pred: AudioTensor, x_true: AudioTensor):
         return self.ratio * sum(loss(x_pred, x_true) for loss in self.losses)
+
+
+class MSSLossV2(nn.Module):
+    """
+    Multi-scale Spectral Loss (revisited)
+    """
+
+    def __init__(
+        self,
+        n_ffts: List[int],
+        distance: Union[nn.L1Loss, nn.MSELoss],
+        compression: str = "log1p",
+        window: str = "hann",
+        overlap=0.75,
+        ratio=1.0,
+        **kwargs,
+    ):
+        super().__init__()
+
+        self.distance = distance
+        self.ratio = ratio
+
+        if compression == "log1p":
+            self.compress = torch.log1p
+        elif compression == "log":
+            self.compress = lambda x: torch.log(x + 1e-7)
+        elif compression == "id":
+            self.compress = lambda x: x
+        else:
+            raise ValueError(f"Unknown compression: {compression}")
+        window_fn = get_window_fn(window)
+
+        self.specs = nn.ModuleList(
+            [
+                Spectrogram(
+                    n_fft=n_fft,
+                    hop_length=int(n_fft - n_fft * overlap),
+                    window_fn=window_fn,
+                    power=1,
+                    **kwargs,
+                )
+                for n_fft in n_ffts
+            ]
+        )
+
+    def forward(self, x_pred: AudioTensor, x_true: AudioTensor):
+        return self.ratio * sum(
+            self.distance(
+                self.compress(spec(x_pred.as_tensor())),
+                self.compress(spec(x_true.as_tensor())),
+            )
+            for spec in self.specs
+        )

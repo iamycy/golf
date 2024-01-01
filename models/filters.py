@@ -409,6 +409,39 @@ class LTIRadiationFilter(FilterInterface):
         ).squeeze(1)
 
 
+class LTIAcousticFilter(FilterInterface):
+    def __init__(
+        self,
+        length: int,
+        conv_method: str = "direct",
+    ):
+        super().__init__()
+        self.kernel = nn.Parameter(torch.zeros(length - 1))
+        self._padding = length - 1
+
+        if conv_method == "direct":
+            self.conv_func = F.conv1d
+        elif conv_method == "fft":
+            self.conv_func = fft_conv1d
+        else:
+            raise ValueError(f"Unknown conv_method: {conv_method}")
+
+    def forward(self, ex: AudioTensor):
+        zero_padded = F.pad(
+            ex.as_tensor()[:, None, :-1], (self._padding, 0), "constant", 0
+        )
+        zero_padded_filtered = self.conv_func(
+            zero_padded, self.kernel[None, None, :]
+        ).squeeze(1)
+        return ex + AudioTensor(zero_padded_filtered)
+
+    @property
+    def impulse_response(self):
+        return torch.cat([self.kernel, torch.ones(1, device=self.kernel.device)]).flip(
+            0
+        )
+
+
 class LTVPQMF(LTVFilterInterface):
     def __init__(self, n_mag: int, filter_order: int, alpha: float = 0.0):
         super().__init__()

@@ -200,7 +200,9 @@ class GlottalFlowTable(OscillatorInterface):
 
 
 class IndexedGlottalFlowTable(GlottalFlowTable):
-    def __init__(self, *args, oversampling: int = 1, **kwargs):
+    def __init__(
+        self, *args, oversampling: int = 1, equal_energy: bool = False, **kwargs
+    ):
         super().__init__(*args, **kwargs)
 
         self.ctrl = wrap_ctrl_fn(
@@ -208,6 +210,7 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
             trsfm_fn=lambda x: (torch.sigmoid(x),),
         )
 
+        self.equal_energy = equal_energy
         self.oversampling = oversampling
         if oversampling > 1:
             self.decimater = Decimate(oversampling)
@@ -256,6 +259,10 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
             instant_phase = instant_phase + phase_offset
         wrapped_phase = instant_phase % 1
         y = self.generate(wrapped_phase, interp_tables)
+
+        if self.equal_energy:
+            y = y * torch.rsqrt(upsampled_phase)
+
         if self.oversampling > 1:
             y = AudioTensor(self.decimater(y.as_tensor()))
         return y

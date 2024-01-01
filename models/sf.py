@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from typing import Optional, Tuple, Union
 
 from .synth import OscillatorInterface
-from .filters import LTVFilterInterface
+from .filters import LTVFilterInterface, FilterInterface
 from .noise import NoiseInterface
 from .utils import AudioTensor
 from .ctrl import PassThrough, Synth
@@ -17,6 +17,7 @@ class SourceFilterSynth(Synth):
         noise_generator: NoiseInterface,
         noise_filter: Union[LTVFilterInterface, PassThrough],
         end_filter: Union[LTVFilterInterface, PassThrough],
+        room_filter: Union[FilterInterface, PassThrough] = None,
         subtract_harmonics: bool = True,
     ):
         super().__init__()
@@ -28,6 +29,9 @@ class SourceFilterSynth(Synth):
         self.noise_filter = noise_filter
         self.end_filter = end_filter
 
+        # Room filter
+        self.room_filter = room_filter if room_filter is not None else PassThrough()
+
     def forward(
         self,
         phase: AudioTensor,
@@ -37,6 +41,7 @@ class SourceFilterSynth(Synth):
         end_filter_params: Tuple[AudioTensor, ...],
         voicing: Optional[AudioTensor] = None,
         target: Optional[AudioTensor] = None,
+        **other_params
     ) -> AudioTensor:
         # Time-varying components
         harm_osc = self.harm_oscillator(phase, *harm_oscillator_params)
@@ -56,4 +61,4 @@ class SourceFilterSynth(Synth):
         if target is not None:
             src, target_src = self.end_filter.reverse(src, target, *end_filter_params)
             return src, target_src
-        return self.end_filter(src, *end_filter_params)
+        return self.room_filter(self.end_filter(src, *end_filter_params))

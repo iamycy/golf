@@ -145,23 +145,20 @@ class M4SingerDataset(Dataset):
         bin_pos = np.digitize(index, self.boundaries[1:], right=False)
         x = self.samples[bin_pos]
         f0 = self.f0s[bin_pos]
+        f0 = np.where(f0 < 60, 0, f0)
         offset = (index - self.boundaries[bin_pos]) * self.hop_num_frames
 
         x = x[offset : offset + self.segment_num_frames]
-        f0 = np.interp(
-            np.arange(offset, offset + self.segment_num_frames),
-            np.arange(len(f0)) * self.f0_hop_num_frames,
-            f0,
-        )
-        f0[f0 < 60] = 0
+        tp = np.arange(len(f0)) * self.f0_hop_num_frames
+        t = np.arange(offset, offset + self.segment_num_frames)
+        mask = np.interp(t, tp, (f0 == 0).astype(float), right=1) > 0
+        interp_f0 = np.where(mask, 0, np.interp(t, tp, f0))
 
         if x.shape[0] < self.segment_num_frames:
             x = np.pad(x, (0, self.segment_num_frames - x.shape[0]), "constant")
-            f0 = np.pad(f0, (0, self.segment_num_frames - f0.shape[0]), "constant")
         else:
             x = x[: self.segment_num_frames]
-            f0 = f0[: self.segment_num_frames]
-        return x.astype(np.float32), f0.astype(np.float32)
+        return x.astype(np.float32), interp_f0.astype(np.float32)
 
 
 class VCTKDataset(M4SingerDataset):

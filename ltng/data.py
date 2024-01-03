@@ -199,6 +199,50 @@ class VCTKDataset(M4SingerDataset):
     file_suffix = "mic1.wav"
 
 
+class VCTKInferenceDataset(Dataset):
+    def __init__(self, wav_dir: str, split: str = "train"):
+        super().__init__()
+        self.wav_dir = pathlib.Path(wav_dir)
+        test_files = []
+        valid_files = []
+        train_files = []
+        for f in self.wav_dir.glob("**/*" + VCTKDataset.file_suffix):
+            parent_prefix = f.parent.name.split("#")[0]
+            if parent_prefix in VCTKDataset.test_folder_prefixes:
+                test_files.append(f)
+            elif parent_prefix in VCTKDataset.valid_folder_prefixes:
+                valid_files.append(f)
+            else:
+                train_files.append(f)
+
+        if split == "train":
+            self.files = train_files
+        elif split == "valid":
+            self.files = valid_files
+        elif split == "test":
+            self.files = test_files
+        else:
+            raise ValueError(f"Unknown split: {split}")
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, index):
+        filename: pathlib.Path = self.files[index]
+        y, sr = sf.read(filename)
+        f0 = np.loadtxt(filename.with_suffix(".pv"))
+        f0 = np.where(f0 < 60, 0, f0)
+        tp = np.arange(len(f0)) * sr // 200
+        t = np.arange(y.shape[0])
+        mask = np.interp(t, tp, (f0 == 0).astype(float), right=1) > 0
+        interp_f0 = np.where(mask, 0, np.interp(t, tp, f0))
+
+        # base file name
+        rel_path = filename.relative_to(self.wav_dir)
+
+        return y.astype(np.float32), interp_f0.astype(np.float32), str(rel_path)
+
+
 class MIR1K(LightningDataModule):
     def __init__(
         self,
@@ -445,3 +489,18 @@ class VCTK(M4Singer):
                 duration=self.hparams.duration,
                 overlap=self.hparams.overlap,
             )
+
+        if stage == "predict":
+            self.predict_dataset = VCTKInferenceDataset(
+                wav_dir=self.hparams.wav_dir,
+                split="test",
+            )
+
+    def predict_dataloader(self):
+        return DataLoader(
+            self.predict_dataset,
+            batch_size=1,
+            num_workers=1,
+            shuffle=False,
+            drop_last=False,
+        )

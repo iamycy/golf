@@ -4,6 +4,7 @@ import pathlib
 import numpy as np
 from tqdm import tqdm
 import soundfile as sf
+from functools import partial
 
 from datasets.mir1k import MIR1KDataset
 from datasets.mpop600 import MPop600Dataset
@@ -87,6 +88,7 @@ class M4SingerDataset(Dataset):
         split: str = "train",
         duration: float = 2.0,
         overlap: float = 1.0,
+        f0_suffix: str = ".pv",
     ):
         super().__init__()
         wav_dir = pathlib.Path(wav_dir)
@@ -127,7 +129,7 @@ class M4SingerDataset(Dataset):
                 self.f0_hop_num_frames = 0.005 * self.sample_rate
             else:
                 assert sr == self.sample_rate
-            f0 = np.loadtxt(filename.with_suffix(".pv"))
+            f0 = np.loadtxt(filename.with_suffix(f0_suffix))
 
             self.f0s.append(f0)
             self.samples.append(x)
@@ -200,7 +202,7 @@ class VCTKDataset(M4SingerDataset):
 
 
 class VCTKInferenceDataset(Dataset):
-    def __init__(self, wav_dir: str, split: str = "train"):
+    def __init__(self, wav_dir: str, split: str = "train", f0_suffix: str = ".pv"):
         super().__init__()
         self.wav_dir = pathlib.Path(wav_dir)
         test_files = []
@@ -224,13 +226,15 @@ class VCTKInferenceDataset(Dataset):
         else:
             raise ValueError(f"Unknown split: {split}")
 
+        self.f0_suffix = f0_suffix
+
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, index):
         filename: pathlib.Path = self.files[index]
         y, sr = sf.read(filename)
-        f0 = np.loadtxt(filename.with_suffix(".pv"))
+        f0 = np.loadtxt(filename.with_suffix(self.f0_suffix))
         f0 = np.where(f0 < 60, 0, f0)
         tp = np.arange(len(f0)) * sr // 200
         t = np.arange(y.shape[0])
@@ -407,34 +411,28 @@ class M4Singer(LightningDataModule):
         wav_dir: str,
         duration: float = 2,
         overlap: float = 0.5,
+        f0_suffix: str = ".pv",
     ):
         super().__init__()
         self.save_hyperparameters()
 
     def setup(self, stage=None):
+        factory = partial(
+            M4SingerDataset,
+            wav_dir=self.hparams.wav_dir,
+            duration=self.hparams.duration,
+            overlap=self.hparams.overlap,
+            f0_suffix=self.hparams.f0_suffix,
+        )
+
         if stage == "fit":
-            self.train_dataset = M4SingerDataset(
-                wav_dir=self.hparams.wav_dir,
-                split="train",
-                duration=self.hparams.duration,
-                overlap=self.hparams.overlap,
-            )
+            self.train_dataset = factory(split="train")
 
         if stage == "validate" or stage == "fit":
-            self.valid_dataset = M4SingerDataset(
-                wav_dir=self.hparams.wav_dir,
-                split="valid",
-                duration=self.hparams.duration,
-                overlap=self.hparams.overlap,
-            )
+            self.valid_dataset = factory(split="valid")
 
         if stage == "test":
-            self.test_dataset = M4SingerDataset(
-                wav_dir=self.hparams.wav_dir,
-                split="test",
-                duration=self.hparams.duration,
-                overlap=self.hparams.overlap,
-            )
+            self.test_dataset = factory(split="test")
 
     def train_dataloader(self):
         return DataLoader(
@@ -466,34 +464,28 @@ class M4Singer(LightningDataModule):
 
 class VCTK(M4Singer):
     def setup(self, stage=None):
+        factory = partial(
+            VCTKDataset,
+            wav_dir=self.hparams.wav_dir,
+            duration=self.hparams.duration,
+            overlap=self.hparams.overlap,
+            f0_suffix=self.hparams.f0_suffix,
+        )
+
         if stage == "fit":
-            self.train_dataset = VCTKDataset(
-                wav_dir=self.hparams.wav_dir,
-                split="train",
-                duration=self.hparams.duration,
-                overlap=self.hparams.overlap,
-            )
+            self.train_dataset = factory(split="train")
 
         if stage == "validate" or stage == "fit":
-            self.valid_dataset = VCTKDataset(
-                wav_dir=self.hparams.wav_dir,
-                split="valid",
-                duration=self.hparams.duration,
-                overlap=self.hparams.overlap,
-            )
+            self.valid_dataset = factory(split="valid")
 
         if stage == "test":
-            self.test_dataset = VCTKDataset(
-                wav_dir=self.hparams.wav_dir,
-                split="test",
-                duration=self.hparams.duration,
-                overlap=self.hparams.overlap,
-            )
+            self.test_dataset = factory(split="test")
 
         if stage == "predict":
             self.predict_dataset = VCTKInferenceDataset(
                 wav_dir=self.hparams.wav_dir,
                 split="test",
+                f0_suffix=self.hparams.f0_suffix,
             )
 
     def predict_dataloader(self):

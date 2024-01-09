@@ -9,14 +9,9 @@ import yaml
 import math
 from collections import defaultdict
 from importlib import import_module
-from frechet_audio_distance import FrechetAudioDistance
-from pesq import pesq, pesq_batch, PesqError
-from soxr import resample
-from pyworld import wav2world
-from pysptk import mcep
-from diffsptk import MelCepstralAnalysis, get_alpha, STFT
+from diffsptk import MelCepstralAnalysis, STFT
 
-from models.utils import AudioTensor, get_f0, freq2cent
+from models.utils import AudioTensor
 from models.sf import SourceFilterSynth
 from models.hpn import HarmonicPlusNoiseSynth
 
@@ -213,12 +208,6 @@ class VoiceAutoEncoder(pl.LightningModule):
         return super().load_state_dict(state_dict, False)
 
     def on_test_start(self) -> None:
-        # frechet = FrechetAudioDistance(
-        #     use_pca=False, use_activation=False, verbose=True
-        # )
-        # frechet.model = frechet.model.to(self.device)
-        # self.frechet = frechet
-
         self.tmp_test_outputs = defaultdict(list)
         self.mcep = nn.Sequential(
             STFT(512, self.sample_rate // 200, 512, window="hanning"),
@@ -258,69 +247,6 @@ class VoiceAutoEncoder(pl.LightningModule):
         )
         tmp_dict["mcd"] = mcd
 
-        # x_hat = x_hat.as_tensor().cpu().numpy().astype(np.float64)
-        # x = x.as_tensor().cpu().numpy().astype(np.float64)
-
-        # if not self.train_with_true_f0:
-        #     f0_hat = np.stack(
-        #         [get_f0(x_hat[i], self.sample_rate, f0_floor=60)[0] for i in range(N)],
-        #         axis=0,
-        #     )
-        #     f0_in_hz = (
-        #         f0_in_hz.set_hop_length(self.sample_rate // 200)
-        #         .as_tensor()
-        #         .cpu()
-        #         .numpy()[:, : f0_hat.shape[1]]
-        #     )
-        #     f0_hat = f0_hat[:, : f0_in_hz.shape[1]]
-        #     f0_in_hz = np.maximum(f0_in_hz, 60)
-        #     f0_hat = np.maximum(f0_hat, 60)
-        #     f0_loss = np.mean(np.abs(freq2cent(f0_hat) - freq2cent(f0_in_hz)))
-        #     tmp_dict["f0_loss"] = f0_loss
-
-        # x_true_embs = (
-        #     torch.cat(
-        #         [self.frechet.model.forward(x[i], self.sample_rate) for i in range(N)],
-        #         dim=0,
-        #     )
-        #     .cpu()
-        #     .numpy()
-        # )
-        # x_hat_embs = (
-        #     torch.cat(
-        #         [
-        #             self.frechet.model.forward(x_hat[i], self.sample_rate)
-        #             for i in range(N)
-        #         ],
-        #         dim=0,
-        #     )
-        #     .cpu()
-        #     .numpy()
-        # )
-
-        # tmp_dict["x_true_embs"] = x_true_embs
-        # tmp_dict["x_hat_embs"] = x_hat_embs
-
-        # # PESQ
-        # x_16k = resample(x.T, self.sample_rate, 16000).T
-        # x_hat_16k = resample(x_hat.T, self.sample_rate, 16000).T
-        # pesq_score = (lambda x: sum(x) / len(x))(
-        #     list(
-        #         map(
-        #             lambda score: score if score >= -0.5 else 0,
-        #             pesq_batch(
-        #                 16000,
-        #                 x_16k[:, : x_hat_16k.shape[1]],
-        #                 x_hat_16k[:, : x_16k.shape[1]],
-        #                 mode="wb",
-        #                 n_processor=8,
-        #                 on_error=PesqError.RETURN_VALUES,
-        #             ),
-        #         )
-        #     )
-        # )
-        # tmp_dict["pesq_score"] = pesq_score
-
         list(
             map(lambda x: self.tmp_test_outputs[x].append(tmp_dict[x]), tmp_dict.keys())
         )
@@ -333,25 +259,6 @@ class VoiceAutoEncoder(pl.LightningModule):
         weights = outputs["N"]
         avg_mss_loss = np.average(outputs["loss"], weights=weights)
         log_dict["avg_mss_loss"] = avg_mss_loss
-
-        # if not self.train_with_true_f0:
-        #     avg_f0_loss = np.average(outputs["f0_loss"], weights=weights)
-        #     log_dict["avg_f0_loss"] = avg_f0_loss
-
-        # x_true_embs = np.concatenate(outputs["x_true_embs"], axis=0)
-        # x_hat_embs = np.concatenate(outputs["x_hat_embs"], axis=0)
-
-        # mu_background, sigma_background = self.frechet.calculate_embd_statistics(
-        #     x_hat_embs
-        # )
-        # mu_eval, sigma_eval = self.frechet.calculate_embd_statistics(x_true_embs)
-        # fad_score = self.frechet.calculate_frechet_distance(
-        #     mu_background, sigma_background, mu_eval, sigma_eval
-        # )
-        # log_dict["fad_score"] = fad_score
-
-        # pesq_score = np.average(outputs["pesq_score"], weights=weights)
-        # log_dict["pesq_score"] = pesq_score
 
         avg_mcd = np.average(outputs["mcd"], weights=weights)
         log_dict["avg_mcd"] = avg_mcd

@@ -542,6 +542,64 @@ class LTVMLSAFilter(LTVFilterInterface):
         return AudioTensor(self.mlsa(ex, mc))
 
 
+class LTVCepFilter(LTVFilterInterface):
+    def __init__(
+        self,
+        filter_order: int,
+        n_fft: int,
+        window: str,
+        hop_length: int,
+        **kwargs,
+    ) -> None:
+        super().__init__()
+
+        assert n_fft % 2 == 0
+
+        self.stft = Spectrogram(
+            n_fft=n_fft,
+            window_fn=get_window_fn(window),
+            hop_length=hop_length,
+            power=None,
+            center=True,
+            onesided=False,
+            **kwargs,
+        )
+        self.istft = InverseSpectrogram(
+            n_fft=n_fft,
+            window_fn=get_window_fn(window),
+            hop_length=hop_length,
+            center=True,
+            onesided=False,
+            **kwargs,
+        )
+
+        self.n_fft = n_fft
+        self.filter_order = filter_order
+        self.hop_length = hop_length
+
+        self.pad = nn.Sequential(
+            nn.ConstantPad1d((0, n_fft // 2 - filter_order), 0),
+            nn.ReflectionPad1d((0, n_fft // 2 - 1)),
+        )
+
+        self.ctrl = wrap_ctrl_fn(
+            split_size=(filter_order + 1,),
+            trsfm_fn=lambda x: (x,),
+        )
+
+    def forward(self, ex: AudioTensor, ceps: AudioTensor, **kwargs):
+        assert ceps.hop_length == self.hop_length
+        ex = ex.as_tensor()
+        ceps = ceps.as_tensor()
+        log_mag = torch.fft.fft(self.pad(ceps), dim=-1).real
+        min_phase = -hilbert(log_mag, dim=-1).imag
+        H = torch.exp(log_mag + 1j * min_phase).transpose(-1, -2)
+
+        X = self.stft(ex)[..., : H.shape[-1]]
+        H = H[..., : X.shape[-1]]
+        return AudioTensor(self.istft(X * H.conj()))
+
+
 class LTVMLSAFilter2(LTVMLSAFilter):
     def __init__(
         self,

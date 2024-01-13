@@ -260,6 +260,15 @@ class AudioTensor(object):
         )
         return ret
 
+    def float(self):
+        return self.new_tensor(self._data.float())
+
+    def double(self):
+        return self.new_tensor(self._data.double())
+
+    def half(self):
+        return self.new_tensor(self._data.half())
+
 
 def get_transformed_lf(
     R_d: float = 0.3,

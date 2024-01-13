@@ -254,7 +254,10 @@ class IndexedGlottalFlowTable(GlottalFlowTable):
                 hop_length=phase.hop_length * self.oversampling,
             )
         upsampled_phase = phase.reduce_hop_length()
-        instant_phase = torch.cumsum(upsampled_phase, 1)
+
+        with torch.autocast(device_type=upsampled_phase.device.type, enabled=False):
+            instant_phase = torch.cumsum(upsampled_phase.float(), 1)
+
         if phase_offset is not None:
             instant_phase = instant_phase + phase_offset
         wrapped_phase = instant_phase % 1
@@ -289,7 +292,10 @@ class WeightedGlottalFlowTable(GlottalFlowTable):
             table_select_weight <= 1
         )
         weighted_tables = table_select_weight @ self.table
-        instant_phase = torch.cumsum(phase.reduce_hop_length(), 1)
+
+        with torch.autocast(device_type=phase.device.type, enabled=False):
+            instant_phase = torch.cumsum(phase.reduce_hop_length().float(), 1)
+
         if phase_offset is not None:
             instant_phase = instant_phase + phase_offset
         wrapped_phase = instant_phase % 1
@@ -428,7 +434,9 @@ class HarmonicOscillator(OscillatorInterface):
         harmonics = torch.unsqueeze(phase, -1) * harm_series
         harmonics = harmonics.reduce_hop_length()
 
-        phase = torch.cumsum(harmonics, axis=1)
+        with torch.autocast(device_type=phase.device.type, enabled=False):
+            phase = torch.cumsum(harmonics.float(), axis=1)
+
         if phase_offset is not None:
             # upsampled_phase_offset = phase_offset.align_to("B", "T").reduce_hop_length()
             # upsampled_phase_offset = upsampled_phase_offset % 1
@@ -493,7 +501,10 @@ class PulseTrain(OscillatorInterface):
     ) -> AudioTensor:
         # Make mask represents voiced region.
         upsampled_phase = phase.reduce_hop_length().as_tensor()
-        instant_phase = torch.cumsum(upsampled_phase, dim=1)
+
+        with torch.autocast(device_type=upsampled_phase.device.type, enabled=False):
+            instant_phase = torch.cumsum(upsampled_phase.float(), dim=1)
+
         if phase_offset is not None:
             instant_phase = instant_phase + phase_offset
         wrapped_phase = instant_phase % 1

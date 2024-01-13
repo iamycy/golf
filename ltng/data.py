@@ -121,7 +121,7 @@ class M4SingerDataset(Dataset):
 
         print("Gathering files ...")
         for filename in tqdm(self.files):
-            x, sr = sf.read(filename)
+            x, sr = sf.read(filename, dtype="float32")
             if self.sample_rate is None:
                 self.sample_rate = sr
                 self.segment_num_frames = int(duration * self.sample_rate)

@@ -549,6 +549,7 @@ class LTVCepFilter(LTVFilterInterface):
         n_fft: int,
         window: str,
         hop_length: int,
+        phase: str = "zero",
         **kwargs,
     ) -> None:
         super().__init__()
@@ -573,9 +574,13 @@ class LTVCepFilter(LTVFilterInterface):
             **kwargs,
         )
 
+        if phase not in ["zero", "min"]:
+            raise ValueError(f"Unknown phase: {phase}")
+
         self.n_fft = n_fft
         self.filter_order = filter_order
         self.hop_length = hop_length
+        self.phase = phase
 
         self.pad = nn.Sequential(
             nn.ConstantPad1d((0, n_fft // 2 - filter_order), 0),
@@ -592,12 +597,16 @@ class LTVCepFilter(LTVFilterInterface):
         ex = ex.as_tensor()
         ceps = ceps.as_tensor()
         log_mag = torch.fft.fft(self.pad(ceps), dim=-1).real
-        min_phase = -hilbert(log_mag, dim=-1).imag
-        H = torch.exp(log_mag + 1j * min_phase).transpose(-1, -2)
+
+        if self.phase == "zero":
+            H = torch.exp(log_mag).transpose(-1, -2)
+        else:
+            min_phase = -hilbert(log_mag, dim=-1).imag
+            H = torch.exp(log_mag + 1j * min_phase).transpose(-1, -2)
 
         X = self.stft(ex)[..., : H.shape[-1]]
         H = H[..., : X.shape[-1]]
-        return AudioTensor(self.istft(X * H.conj()))
+        return AudioTensor(self.istft(X * H))
 
 
 class LTVMLSAFilter2(LTVMLSAFilter):
@@ -658,7 +667,7 @@ class LTVMLSAFilter2(LTVMLSAFilter):
 
         X = self.stft(ex)[..., : H.shape[-1]]
         H = H[..., : X.shape[-1]]
-        return AudioTensor(self.istft(X * H.conj()))
+        return AudioTensor(self.istft(X * H))
 
 
 class LTVAPFilter(LTVMLSAFilter):

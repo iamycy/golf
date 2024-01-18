@@ -1,3 +1,4 @@
+from lightning import LightningModule, Trainer
 import lightning.pytorch as pl
 from lightning.pytorch.strategies import DDPStrategy
 from lightning.pytorch.loggers.wandb import WandbLogger
@@ -26,6 +27,17 @@ class MyConfigCallback(Callback):
         self.overwrite = overwrite
         self.multifile = multifile
         self.already_saved = False
+
+    def on_test_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        if self.already_saved:
+            return
+
+        if trainer.is_global_zero:
+            if trainer.logger is not None:
+                trainer.logger.log_hyperparams(self.config.as_dict())
+            self.already_saved = True
+
+        self.already_saved = trainer.strategy.broadcast(self.already_saved)
 
     def on_train_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         if self.already_saved:

@@ -4,7 +4,7 @@ from pathlib import Path
 import soundfile as sf
 from tqdm import tqdm
 from soxr import resample
-from frechet_audio_distance import FrechetAudioDistance
+
 from pesq import pesq
 
 if __name__ == "__main__":
@@ -37,14 +37,6 @@ if __name__ == "__main__":
             )
         )
     )
-
-    frechet = FrechetAudioDistance(use_pca=False, use_activation=False, verbose=True)
-
-    fad_score = frechet.calculate_frechet_distance(
-        *frechet.calculate_embd_statistics(frechet.get_embeddings(pred_audios)),
-        *frechet.calculate_embd_statistics(frechet.get_embeddings(ref_audios)),
-    )
-    print(f"Frechet Audio Distance: {fad_score}")
 
     def runner(args):
         ref, pred = args

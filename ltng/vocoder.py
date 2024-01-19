@@ -8,7 +8,6 @@ from torchaudio.transforms import MelSpectrogram
 import numpy as np
 import yaml
 from importlib import import_module
-from frechet_audio_distance import FrechetAudioDistance
 
 from models.utils import get_window_fn
 from models.hpn import HarmonicPlusNoiseSynth

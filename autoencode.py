@@ -43,7 +43,7 @@ class MyPredictionWriter(BasePredictionWriter):
 
 if __name__ == "__main__":
     cli = VoiceAutoEncoderCLI(
-        VoiceAutoEncoder,
+        # VoiceAutoEncoder,
         # subclass_mode_model=True,
         trainer_defaults={
             "accelerator": "gpu",

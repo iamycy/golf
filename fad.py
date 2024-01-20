@@ -3,6 +3,7 @@ import argparse
 import torch
 import math
 from pathlib import Path
+from itertools import chain
 from fadtk.model_loader import ModelLoader
 from fadtk.fad import FrechetAudioDistance, log
 from fadtk.fad_batch import cache_embedding_files
@@ -79,36 +80,53 @@ if __name__ == "__main__":
 
     parser.add_argument("baseline", type=str, help="The baseline dataset")
     parser.add_argument("eval", type=str, help="The directory to evaluate against")
+    parser.add_argument("--csv", type=str, help="The CSV file to write results to")
 
     # Add optional arguments
-    parser.add_argument("-w", "--workers", type=int, default=8)
-    parser.add_argument("--inf", action="store_true", help="Use FAD-inf extrapolation")
+    parser.add_argument("-w", "--workers", type=int, default=4)
 
     args = parser.parse_args()
     model = DAC24kModel()
 
-    baseline = args.baseline
-    eval_ = args.eval
+    baseline = Path(args.baseline)
+    eval_ = Path(args.eval)
 
-    # 1. Calculate embedding files for each dataset
-    for d in [baseline, eval_]:
-        if Path(d).is_dir():
-            cache_embedding_files(d, model, workers=args.workers)
+    speaker_dirs = [x.stem for x in filter(lambda x: x.is_dir(), eval_.iterdir())]
 
-    # 2. Calculate FAD
+    # calculate embedding files for each speaker
+    cache_embedding_files(
+        list(
+            chain.from_iterable(
+                [(p / s).glob("*.*") for s in speaker_dirs for p in (baseline, eval_)]
+            )
+        ),
+        ml=model,
+        workers=args.workers,
+    )
+
+    # 2. Calculate FAD of each speaker, and summarize as min, max, mean, std
     fad = FrechetAudioDistance(model, audio_load_worker=args.workers, load_model=False)
-    if args.inf:
-        assert Path(
-            eval_
-        ).is_dir(), "FAD-inf requires a directory as the evaluation dataset"
-        score = fad.score_inf(baseline, list(Path(eval_).glob("*.*")))
-        print("FAD-inf Information:", score)
-        score, inf_r2 = score.score, score.r2
-    else:
-        score = fad.score(baseline, eval_)
-        inf_r2 = None
+
+    scores = np.array(
+        list(
+            map(
+                lambda s: fad.score(baseline / s, eval_ / s),
+                speaker_dirs,
+            )
+        )
+    )
 
     # 3. Print results
     log.info("FAD computed.")
 
-    log.info(f"The FAD {model.name} score between {baseline} and {eval_} is: {score}")
+    log.info(
+        f"The FAD {model.name} score between {baseline} and {eval_} is: mean {scores.mean():.4f}, std {scores.std():.4f}, min {scores.min():.4f}, max {scores.max():.4f}"
+    )
+
+    # save raw scores to csv
+    if args.csv:
+        import pandas as pd
+
+        pd.DataFrame.from_dict(
+            dict(zip(speaker_dirs, scores)), orient="index", columns=["score"]
+        ).to_csv(args.csv)

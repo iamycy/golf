@@ -12,6 +12,7 @@ from diffsptk import (
     MelGeneralizedCepstrumToSpectrum,
     PQMF,
     IPQMF,
+    LineSpectralPairsToLinearPredictiveCoefficients,
 )
 from torchlpc import sample_wise_lpc
 
@@ -70,17 +71,27 @@ class LTVMinimumPhaseFilterPrecise(LTVFilterInterface):
     ):
         super().__init__()
 
-        if lpc_parameterisation != "rc2lpc":
+        if lpc_parameterisation == "coef":
             logits2biquads = get_logits2biquads(lpc_parameterisation, max_abs_value)
             logits2lpc = lambda logits: biquads2lpc(
                 logits2biquads(logits.view(logits.shape[0], logits.shape[1], -1, 2))
             )
-        else:
+            num_logits = lpc_order
+        elif lpc_parameterisation == "rc2lpc":
             logits2lpc = lambda logits: rc2lpc(logits.tanh() * max_abs_value)
+            num_logits = lpc_order
+        elif lpc_parameterisation == "lsp2lpc":
+            self.lsp2lpc = LineSpectralPairsToLinearPredictiveCoefficients(
+                lpc_order=lpc_order
+            )
+            logits2lpc = lambda logits: self.lsp2lpc(
+                logits.softmax(-1).cumsum(-1).roll(1, -1) * torch.pi
+            )[..., 1:]
+            num_logits = lpc_order + 1
 
         if lpc_order is not None:
             self.ctrl = wrap_ctrl_fn(
-                split_size=(1, lpc_order),
+                split_size=(1, num_logits),
                 trsfm_fn=lambda log_gain, lpc_logits: (
                     torch.exp(log_gain),
                     lpc_logits.new_tensor(logits2lpc(lpc_logits.as_tensor())),

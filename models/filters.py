@@ -71,7 +71,7 @@ class LTVMinimumPhaseFilterPrecise(LTVFilterInterface):
     ):
         super().__init__()
 
-        if lpc_parameterisation == "coef":
+        if lpc_parameterisation in ("coef", "conj", "real"):
             logits2biquads = get_logits2biquads(lpc_parameterisation, max_abs_value)
             logits2lpc = lambda logits: biquads2lpc(
                 logits2biquads(logits.view(logits.shape[0], logits.shape[1], -1, 2))
@@ -88,6 +88,8 @@ class LTVMinimumPhaseFilterPrecise(LTVFilterInterface):
                 logits.softmax(-1).cumsum(-1).roll(1, -1) * torch.pi
             )[..., 1:]
             num_logits = lpc_order + 1
+        else:
+            raise ValueError(f"Unknown lpc_parameterisation: {lpc_parameterisation}")
 
         if lpc_order is not None:
             self.ctrl = wrap_ctrl_fn(

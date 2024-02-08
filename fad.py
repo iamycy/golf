@@ -41,8 +41,6 @@ class DAC24kModel(ModelLoader):
         win_len = win_len / self.sr
         hop_len = win_len * overlap_hop_ratio
 
-        stime = time.time()
-
         # Sanitize input
         audio.normalize(-16)
         audio.ensure_max_of_audio()

@@ -10,7 +10,6 @@ from importlib import import_module
 import pyworld as pw
 from functools import partial
 import time
-from frechet_audio_distance import FrechetAudioDistance
 
 from datasets.mpop600 import MPop600Dataset
 from loss.spec import MSSLoss

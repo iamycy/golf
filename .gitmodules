@@ -1,3 +1,6 @@
 [submodule "datasets"]
 	path = datasets
 	url = git@github.com:yoyololicon/pytorch-wav-datasets.git
+[submodule "models/audiotensor"]
+	path = models/audiotensor
+	url = git@github.com:yoyololicon/audiotensor.git

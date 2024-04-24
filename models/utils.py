@@ -8,8 +8,10 @@ import math
 from scipy.signal import get_window
 from typing import Any, Callable, Optional, Tuple, Union, List
 
+from .audiotensor import AudioTensor
 
-class AudioTensor(object):
+
+class LegacyAudioTensor(object):
     def __init__(
         self,
         data: Union[Tensor, np.ndarray],
@@ -246,16 +248,20 @@ class AudioTensor(object):
             h % minimum_hop_length == 0 for h in hop_lengths
         ), "All hop lengths must be divisible by each other"
         ret = tuple(
-            t.reduce_hop_length(t.hop_length // minimum_hop_length)
-            if t.hop_length > minimum_hop_length
-            else t
+            (
+                t.reduce_hop_length(t.hop_length // minimum_hop_length)
+                if t.hop_length > minimum_hop_length
+                else t
+            )
             for t in tensors
         )
         max_ndim = max(t.ndim for t in ret)
         ret = tuple(
-            t[(slice(None),) * t.ndim + (None,) * (max_ndim - t.ndim)]
-            if t.ndim < max_ndim
-            else t
+            (
+                t[(slice(None),) * t.ndim + (None,) * (max_ndim - t.ndim)]
+                if t.ndim < max_ndim
+                else t
+            )
             for t in ret
         )
         return ret

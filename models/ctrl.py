@@ -3,7 +3,7 @@ import torch
 from functools import reduce
 from itertools import starmap
 
-from .utils import AudioTensor
+from .audiotensor import AudioTensor
 
 TRSFM_TYPE = Callable[..., Tuple[AudioTensor, ...]]
 

@@ -11,7 +11,7 @@ from collections import defaultdict
 from importlib import import_module
 from diffsptk import MelCepstralAnalysis, STFT
 
-from models.utils import AudioTensor
+from models.audiotensor import AudioTensor
 from models.sf import SourceFilterSynth
 from models.hpn import HarmonicPlusNoiseSynth
 

@@ -17,7 +17,7 @@ from diffsptk import (
 from torchlpc import sample_wise_lpc
 
 
-from models.utils import AudioTensor
+from .audiotensor import AudioTensor
 
 
 from .lpc import lpc_synthesis

@@ -6,8 +6,8 @@ from typing import Optional, Union, List, Tuple, Callable, Any, Dict
 from torchaudio.transforms import Spectrogram
 from itertools import accumulate, tee
 
-from .utils import get_logits2biquads, biquads2lpc, AudioTensor, rc2lpc, get_window_fn
-
+from .utils import get_logits2biquads, biquads2lpc, rc2lpc, get_window_fn
+from .audiotensor import AudioTensor
 
 def pairwise(iterable):
     a, b = tee(iterable)

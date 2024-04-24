@@ -4,7 +4,7 @@ from typing import Optional, Tuple, Union, List, Callable, Any
 from .synth import OscillatorInterface
 from .filters import FilterInterface, LTVFilterInterface
 from .noise import NoiseInterface
-from .utils import AudioTensor
+from .audiotensor import AudioTensor
 from .ctrl import PassThrough, Synth
 
 

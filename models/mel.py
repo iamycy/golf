@@ -1,9 +1,10 @@
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
+from torchaudio.transforms import Spectrogram
 
 from .enc import BackboneModelInterface
-from .utils import AudioTensor
+from .audiotensor import AudioTensor
 
 
 class Mel2Control(BackboneModelInterface):
@@ -34,7 +35,37 @@ class Mel2Control(BackboneModelInterface):
         x = torch.transpose(self.stack(torch.transpose(mels, 1, 2)), 1, 2)
         x = self.decoder(x)[0]
         x = self.norm(x)
-        return super().forward(x)
+        return mels.new_tensor(super().forward(x))
+
+
+class X2Control(Mel2Control):
+    def __init__(self, n_fft: int = 1024, hop_length: int = 256, **kwargs):
+        super().__init__(in_channels=n_fft // 2 + 2, **kwargs)
+
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.spectrogram = Spectrogram(n_fft=n_fft, hop_length=hop_length, center=True)
+
+        self.register_buffer("log_spec_min", torch.tensor(torch.inf))
+        self.register_buffer("log_spec_max", torch.tensor(-torch.inf))
+
+    def forward(self, x: AudioTensor, f0: AudioTensor) -> AudioTensor:
+        log_spec = self.spectrogram(x.as_tensor()).add(1e-8).log().mT
+        if self.training:
+            self.log_spec_min.fill_(min(self.log_spec_min, torch.min(log_spec).item()))
+            self.log_spec_max.fill_(max(self.log_spec_max, torch.max(log_spec).item()))
+        h = (log_spec - self.log_spec_min) / (self.log_spec_max - self.log_spec_min)
+
+        f0 = (
+            f0.set_hop_length(self.hop_length)
+            .truncate(h.size(1))
+            .as_tensor()
+            .unsqueeze(2)
+        )
+        h = h[:, : f0.size(1)]
+        h = torch.cat([h, torch.log1p(f0)], dim=-1)
+        h = AudioTensor(h, hop_length=self.hop_length)
+        return super().forward(h)
 
 
 class LPCFrameNet(BackboneModelInterface):

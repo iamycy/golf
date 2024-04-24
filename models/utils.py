@@ -8,8 +8,6 @@ import math
 from scipy.signal import get_window
 from typing import Any, Callable, Optional, Tuple, Union, List
 
-from .audiotensor import AudioTensor
-
 
 class LegacyAudioTensor(object):
     def __init__(
@@ -25,11 +23,11 @@ class LegacyAudioTensor(object):
         return f"Hop-length: {self.hop_length}\n" + repr(self._data)
 
     def __getitem__(self, index):
-        return AudioTensor(self._data[index], hop_length=self.hop_length)
+        return LegacyAudioTensor(self._data[index], hop_length=self.hop_length)
 
     def unfold(self, size: int, step: int = 1):
         assert self.ndim == 2
-        return AudioTensor(
+        return LegacyAudioTensor(
             self._data.unfold(1, size, step), hop_length=self.hop_length * step
         )
 
@@ -139,7 +137,7 @@ class LegacyAudioTensor(object):
             return self
 
         data = self._data[:, ::factor]
-        return AudioTensor(data, hop_length=self.hop_length * factor)
+        return LegacyAudioTensor(data, hop_length=self.hop_length * factor)
 
     def reduce_hop_length(self, factor: int = None):
         if factor is None:
@@ -161,7 +159,7 @@ class LegacyAudioTensor(object):
         if self.ndim > 2:
             expand_self_copy = expand_self_copy.transpose(1, -1)
 
-        return AudioTensor(expand_self_copy, hop_length=self.hop_length // factor)
+        return LegacyAudioTensor(expand_self_copy, hop_length=self.hop_length // factor)
 
     @property
     def steps(self):
@@ -173,13 +171,13 @@ class LegacyAudioTensor(object):
         if steps >= self.steps:
             return self
         data = self._data.narrow(1, 0, steps)
-        return AudioTensor(data, hop_length=self.hop_length)
+        return LegacyAudioTensor(data, hop_length=self.hop_length)
 
     def as_tensor(self):
         return self._data
 
     def new_tensor(self, data: Tensor):
-        return AudioTensor(data, hop_length=self.hop_length)
+        return LegacyAudioTensor(data, hop_length=self.hop_length)
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
@@ -199,14 +197,14 @@ class LegacyAudioTensor(object):
             torch.where,
             torch.matmul,
         ):
-            audio_tensors = tuple(a for a in args if isinstance(a, AudioTensor))
-            audio_tensors = AudioTensor.broadcasting(*audio_tensors)
+            audio_tensors = tuple(a for a in args if isinstance(a, LegacyAudioTensor))
+            audio_tensors = LegacyAudioTensor.broadcasting(*audio_tensors)
             min_steps = min(a.steps for a in audio_tensors)
             audio_tensors = tuple(a.truncate(min_steps) for a in audio_tensors)
             broadcasted_args = []
             i = 0
             for a in args:
-                if isinstance(a, AudioTensor):
+                if isinstance(a, LegacyAudioTensor):
                     broadcasted_args.append(audio_tensors[i])
                     i += 1
                 else:
@@ -214,28 +212,30 @@ class LegacyAudioTensor(object):
             args = broadcasted_args
         elif func in (torch.cat, torch.stack):
             raise NotImplementedError(
-                "AudioTensors do not support torch.cat and torch.stack"
+                "LegacyAudioTensors do not support torch.cat and torch.stack"
             )
         if kwargs is None:
             kwargs = {}
         hop_lengths = []
         for a in args:
-            if isinstance(a, AudioTensor):
+            if isinstance(a, LegacyAudioTensor):
                 hop_lengths.append(a.hop_length)
             elif isinstance(a, (tuple, list)):
                 for aa in a:
-                    if isinstance(aa, AudioTensor):
+                    if isinstance(aa, LegacyAudioTensor):
                         hop_lengths.append(aa.hop_length)
 
         assert len(hop_lengths) > 0 and all(
             h == hop_lengths[0] for h in hop_lengths
-        ), "All AudioTensors must have the same hop length but got {}".format(
+        ), "All LegacyAudioTensors must have the same hop length but got {}".format(
             ", ".join(str(h) for h in hop_lengths)
         )
-        args = tuple(a.as_tensor() if isinstance(a, AudioTensor) else a for a in args)
+        args = tuple(
+            a.as_tensor() if isinstance(a, LegacyAudioTensor) else a for a in args
+        )
         ret = func(*args, **kwargs)
         if isinstance(ret, torch.Tensor) and ret.ndim != 0 and len(hop_lengths) > 0:
-            return AudioTensor(ret, hop_length=hop_lengths[0])
+            return LegacyAudioTensor(ret, hop_length=hop_lengths[0])
         return ret
 
     @classmethod

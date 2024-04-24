@@ -5,12 +5,11 @@ import math
 from typing import Optional, Union, List, Tuple, Callable
 from kazane import Decimate
 
-from models.utils import AudioTensor
+from .audiotensor import AudioTensor
 
 from .utils import (
     get_transformed_lf,
     get_transformed_lf_v2,
-    AudioTensor,
 )
 from .ctrl import Controllable, wrap_ctrl_fn
 

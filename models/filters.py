@@ -27,7 +27,6 @@ from .utils import (
     coeff_product,
     complex2biquads,
     params2biquads,
-    AudioTensor,
     hilbert,
     fir_filt,
     rc2lpc,

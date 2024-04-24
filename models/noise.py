@@ -5,7 +5,7 @@ import math
 from scipy import signal
 
 from .ctrl import Controllable, SPLIT_TRSFM_SIGNATURE, TRSFM_TYPE
-from .utils import AudioTensor
+from .audiotensor import AudioTensor
 
 __all__ = [
     "NoiseInterface",

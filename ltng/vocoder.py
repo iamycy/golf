@@ -13,8 +13,8 @@ from models.utils import get_window_fn
 from models.hpn import HarmonicPlusNoiseSynth
 from models.sf import SourceFilterSynth
 from models.enc import VocoderParameterEncoderInterface
-from models.utils import AudioTensor, get_f0, freq2cent
-
+from models.utils import get_f0, freq2cent
+from models.audiotensor import AudioTensor
 
 class ScaledLogMelSpectrogram(MelSpectrogram):
     def __init__(self, window: str, **kwargs):

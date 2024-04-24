@@ -4,7 +4,8 @@ import torch.nn.functional as F
 from torchaudio.transforms import Spectrogram
 from typing import Optional, Tuple, Union, List, Callable, Any
 
-from models.utils import get_window_fn, AudioTensor
+from models.utils import get_window_fn
+from models.audiotensor import AudioTensor
 
 
 class SSSLoss(nn.Module):

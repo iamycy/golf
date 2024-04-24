@@ -6,7 +6,7 @@ from typing import Optional, Tuple, Union
 from .synth import OscillatorInterface
 from .filters import LTVFilterInterface, FilterInterface
 from .noise import NoiseInterface
-from .utils import AudioTensor
+from .audiotensor import AudioTensor
 from .ctrl import PassThrough, Synth
 
 

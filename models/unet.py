@@ -6,7 +6,7 @@ from typing import Tuple, Dict, Union, Callable, List
 from functools import reduce
 import math
 
-from .utils import AudioTensor
+from .audiotensor import AudioTensor
 from .enc import BackboneModelInterface
 
 

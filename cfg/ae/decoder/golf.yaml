@@ -1,0 +1,38 @@
+decoder:
+  class_path: models.sf.SourceFilterSynth
+  init_args:
+    harm_oscillator:
+      class_path: models.synth.DownsampledIndexedGlottalFlowTable
+      init_args:
+        hop_rate: 10
+        in_channels: 64
+        oversampling: 4
+        equal_energy: true
+        table_type: derivative
+        normalize_method: constant_power
+        align_peak: true
+        trainable: false
+        min_R_d: 0.3
+        max_R_d: 2.7
+        lf_v2: true
+        points: 2048
+    noise_generator:
+      class_path: models.noise.StandardNormalNoise
+    noise_filter:
+      class_path: models.filters.LTVZeroPhaseFIRFilter
+      init_args:
+        window: hanning
+        n_mag: 256
+    end_filter:
+      class_path: models.filters.LTVMinimumPhaseFilter
+      init_args:
+        window: ${decoder.init_args.noise_filter.init_args.window}
+        window_length: 960
+        lpc_order: 22
+        lpc_parameterisation: rc2lpc
+    room_filter:
+      class_path: models.filters.LTIAcousticFilter
+      init_args:
+        length: 128
+        conv_method: fft
+    subtract_harmonics: false

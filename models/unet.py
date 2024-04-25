@@ -40,6 +40,14 @@ class LRUBlock(nn.Module):
     ):
         super().__init__()
         self.proj = nn.Linear(input_size, hidden_size, bias=False)
+        self.zi_pred = nn.ParameterList(
+            [
+                nn.Parameter(
+                    torch.zeros(hidden_size, hidden_size, dtype=torch.complex64)
+                )
+                for _ in range(num_layers)
+            ]
+        )
         self.norm = nn.ModuleList(
             [nn.LayerNorm(hidden_size) for _ in range(num_layers)]
         )
@@ -59,10 +67,16 @@ class LRUBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        def fn(h, models):
+            ff, lru, zi_pred, norm = models
+            h = norm(h)
+            h, _ = lru(h, (h[:, -1, :] + 0j) @ zi_pred)
+            return ff(h)
+
         return (
             reduce(
-                lambda h, m: h + m[0](m[1](m[2](h))[0]),
-                zip(self.ff, self.lru, self.norm),
+                fn,
+                zip(self.ff, self.lru, self.zi_pred, self.norm),
                 self.proj(x),
             ),
             None,

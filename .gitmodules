@@ -4,3 +4,6 @@
 [submodule "models/audiotensor"]
 	path = models/audiotensor
 	url = git@github.com:yoyololicon/audiotensor.git
+[submodule "models/lru"]
+	path = models/lru
+	url = git@github.com:yoyololicon/torchlru.git

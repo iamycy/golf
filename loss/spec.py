@@ -21,8 +21,8 @@ class SSSLoss(nn.Module):
         self.spec = Spectrogram(power=1, window_fn=get_window_fn(window), **kwargs)
 
     def forward(self, pred: AudioTensor, target: AudioTensor):
-        S_true = self.spec(target.as_tensor())
-        S_pred = self.spec(pred.as_tensor())
+        S_true = self.spec(target)
+        S_pred = self.spec(pred)
         linear_term = F.l1_loss(S_pred, S_true)
         log_term = F.l1_loss((S_true + self.eps).log2(), (S_pred + self.eps).log2())
         loss = linear_term + self.alpha * log_term

@@ -113,7 +113,9 @@ class VoiceAutoEncoder(pl.LightningModule):
             params["voicing"] = voicing
 
         x_hat = self.decoder(**params)
-        loss = self.criterion(x_hat[:, : x.shape[1]], x[:, : x_hat.shape[1]]).as_tensor()
+        loss = self.criterion(
+            x_hat[:, : x.shape[1]], x[:, : x_hat.shape[1]]
+        ).as_tensor()
 
         if f0_hat is not None:
             f0_target = f0_in_hz[:, :: f0_hat.hop_length].as_tensor()[
@@ -155,7 +157,7 @@ class VoiceAutoEncoder(pl.LightningModule):
             x_hat, enc_params = self(x, f0_in_hz, {"phase": phase})
         else:
             x_hat, enc_params = self(x)
-        loss = self.criterion(x_hat[:, : x.shape[1]], x[:, : x_hat.shape[1]])
+        loss = self.criterion(x_hat[:, : x.shape[1]], x[:, : x_hat.shape[1]]).item()
 
         val_outputs = []
         if "f0" in enc_params:
@@ -165,7 +167,7 @@ class VoiceAutoEncoder(pl.LightningModule):
             ]
             f0_pred = f0_hat.as_tensor()[:, : f0_target.shape[1]]
             mask = f0_target > 50
-            f0_loss = self.f0_loss(f0_pred[mask], f0_target[mask])
+            f0_loss = self.f0_loss(f0_pred[mask], f0_target[mask]).item()
             loss = loss + f0_loss * self.f0_loss_weight
             val_outputs.append(f0_loss)
 
@@ -178,7 +180,7 @@ class VoiceAutoEncoder(pl.LightningModule):
             voicing_logits = voicing_logits.as_tensor()[:, : voicing_target.shape[1]]
             voicing_loss = F.binary_cross_entropy_with_logits(
                 voicing_logits, voicing_target, reduction="mean"
-            )
+            ).item()
             loss = loss + voicing_loss * self.voicing_loss_weight
             val_outputs.append(voicing_loss)
 

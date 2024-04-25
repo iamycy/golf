@@ -8,6 +8,7 @@ import math
 
 from .audiotensor import AudioTensor
 from .enc import BackboneModelInterface
+from .lru import LRU
 
 
 def interp_env(x: torch.Tensor, dyn_freqs: torch.Tensor, static_freqs: torch.Tensor):
@@ -28,6 +29,46 @@ def interp_env(x: torch.Tensor, dyn_freqs: torch.Tensor, static_freqs: torch.Ten
     return torch.where(valid_mask, env, 0)
 
 
+class LRUBlock(nn.Module):
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        num_layers: int = 1,
+        dropout: float = 0,
+        mlp_factor: int = 4,
+    ):
+        super().__init__()
+        self.proj = nn.Linear(input_size, hidden_size, bias=False)
+        self.norm = nn.ModuleList(
+            [nn.LayerNorm(hidden_size) for _ in range(num_layers)]
+        )
+        self.lru = nn.ModuleList(
+            [LRU(hidden_size, hidden_size) for _ in range(num_layers)]
+        )
+        self.ff = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(hidden_size, hidden_size * mlp_factor),
+                    nn.GELU(),
+                    nn.Linear(hidden_size * mlp_factor, hidden_size),
+                    nn.Dropout(dropout),
+                )
+                for _ in range(num_layers)
+            ]
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return (
+            reduce(
+                lambda h, m: h + m[0](m[1](m[2](h))[0]),
+                zip(self.ff, self.lru, self.norm),
+                self.proj(x),
+            ),
+            None,
+        )
+
+
 class UNetEncoder(BackboneModelInterface):
     def __init__(
         self,
@@ -41,9 +82,12 @@ class UNetEncoder(BackboneModelInterface):
         num_harmonics: int = 150,
         sample_rate: int = 22050,
         f0_conditioning: bool = True,
+        use_lru: bool = False,
         **lstm_kwargs,
     ):
-        super().__init__(lstm_hidden_size * 2, out_channels)
+        super().__init__(
+            lstm_hidden_size if use_lru else lstm_hidden_size * 2, out_channels
+        )
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.spectrogram = Spectrogram(n_fft=n_fft, hop_length=hop_length, center=True)
@@ -72,14 +116,22 @@ class UNetEncoder(BackboneModelInterface):
         )
 
         self.cnns = nn.Sequential(*blocks)
-        self.lstm = nn.LSTM(
-            flatten_size + 1 if f0_conditioning else flatten_size,
-            lstm_hidden_size,
-            batch_first=True,
-            bidirectional=True,
-            **lstm_kwargs,
-        )
-        self.norm = nn.LayerNorm(lstm_hidden_size * 2)
+        if not use_lru:
+            self.lstm = nn.LSTM(
+                flatten_size + 1 if f0_conditioning else flatten_size,
+                lstm_hidden_size,
+                batch_first=True,
+                bidirectional=True,
+                **lstm_kwargs,
+            )
+            self.norm = nn.LayerNorm(lstm_hidden_size * 2)
+        else:
+            self.lstm = LRUBlock(
+                flatten_size + 1 if f0_conditioning else flatten_size,
+                lstm_hidden_size,
+                **lstm_kwargs,
+            )
+            self.norm = nn.LayerNorm(lstm_hidden_size)
 
         self.register_buffer("log_spec_min", torch.tensor(torch.inf))
         self.register_buffer("log_spec_max", torch.tensor(-torch.inf))

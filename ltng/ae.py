@@ -113,7 +113,7 @@ class VoiceAutoEncoder(pl.LightningModule):
             params["voicing"] = voicing
 
         x_hat = self.decoder(**params)
-        loss = self.criterion(x_hat[:, : x.shape[1]], x[:, : x_hat.shape[1]])
+        loss = self.criterion(x_hat[:, : x.shape[1]], x[:, : x_hat.shape[1]]).as_tensor()
 
         if f0_hat is not None:
             f0_target = f0_in_hz[:, :: f0_hat.hop_length].as_tensor()[

@@ -12,8 +12,8 @@ from diffsptk import (
     MelGeneralizedCepstrumToSpectrum,
     PQMF,
     IPQMF,
-    LineSpectralPairsToLinearPredictiveCoefficients,
 )
+from diffsptk.functional import lsp2lpc
 from torchlpc import sample_wise_lpc
 
 
@@ -80,10 +80,7 @@ class LTVMinimumPhaseFilterPrecise(LTVFilterInterface):
             logits2lpc = lambda logits: rc2lpc(logits.tanh() * max_abs_value)
             num_logits = lpc_order
         elif lpc_parameterisation == "lsp2lpc":
-            self.lsp2lpc = LineSpectralPairsToLinearPredictiveCoefficients(
-                lpc_order=lpc_order
-            )
-            logits2lpc = lambda logits: self.lsp2lpc(
+            logits2lpc = lambda logits: lsp2lpc(
                 logits.softmax(-1).cumsum(-1).roll(1, -1) * torch.pi
             )[..., 1:]
             num_logits = lpc_order + 1

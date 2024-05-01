@@ -16,6 +16,7 @@ from models.enc import VocoderParameterEncoderInterface
 from models.utils import get_f0, freq2cent
 from models.audiotensor import AudioTensor
 
+
 class ScaledLogMelSpectrogram(MelSpectrogram):
     def __init__(self, window: str, **kwargs):
         super().__init__(window_fn=get_window_fn(window), **kwargs)
@@ -103,9 +104,12 @@ class DDSPVocoder(pl.LightningModule):
 
         module_path, class_name = encoder_class_path.rsplit(".", 1)
         module = import_module(module_path)
-        split_sizes, trsfms = self.decoder.get_split_sizes_and_trsfms()
+        split_sizes, trsfms, args_keys = self.decoder.split_sizes_and_trsfms
         self.encoder = getattr(module, class_name)(
-            split_sizes=split_sizes, trsfms=trsfms, **encoder_init_args
+            split_sizes=split_sizes,
+            trsfms=trsfms,
+            args_keys=args_keys,
+            **encoder_init_args,
         )
 
         self.sample_rate = sample_rate
@@ -119,18 +123,20 @@ class DDSPVocoder(pl.LightningModule):
         self.inverse_target = inverse_target
 
     def forward(self, feats: torch.Tensor):
-        (f0, *other_params, voicing_logits) = self.encoder(feats)
+        # (f0, *other_params, voicing_logits) = self.encoder(feats)
+        params = self.encoder(feats)
 
-        phase = f0 / self.sample_rate
+        f0 = params.pop("f0")
+        params["phase"] = f0 / self.sample_rate
+
+        voicing_logits = params.pop("voicing_logits", None)
         if voicing_logits is not None:
-            voicing = torch.sigmoid(voicing_logits)
-        else:
-            voicing = None
+            params["voicing"] = torch.sigmoid(voicing_logits)
 
         return (
             f0,
-            self.decoder(phase, *other_params, voicing=voicing),
-            voicing,
+            self.decoder(**params),
+            params.get("voicing", None),
         )
 
     def f0_loss(self, f0_hat, f0):

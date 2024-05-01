@@ -9,6 +9,35 @@ from scipy.signal import get_window
 from typing import Any, Callable, Optional, Tuple, Union, List
 
 
+def ismir2interspeech_ckpt(ckpt: dict, lpc_order: int, h_size: int) -> dict:
+    def swap_weights(voice_lpc, voice_gain, noise_lpc, noise_gain, h):
+        return h, voice_gain, voice_lpc, noise_gain, noise_lpc
+
+    old_split_sizes = [lpc_order, 1, lpc_order, 1, h_size]
+    size_sum = sum(old_split_sizes)
+    return {
+        k: (
+            torch.cat(
+                [
+                    v[:-size_sum],
+                    torch.cat(
+                        list(
+                            swap_weights(
+                                *torch.split(v[-size_sum:], old_split_sizes, dim=0)
+                            )
+                        ),
+                        dim=0,
+                    ),
+                ],
+                dim=0,
+            )
+            if "out_linear" in k
+            else v
+        )
+        for k, v in ckpt.items()
+    }
+
+
 class LegacyAudioTensor(object):
     def __init__(
         self,

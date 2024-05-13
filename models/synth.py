@@ -135,53 +135,46 @@ class GlottalFlowTable(OscillatorInterface):
         hop_length = tables.hop_length
         tables = tables.as_tensor()
 
-        # pad phase to have multiple of hop_length
-        pad_length = (hop_length - seq_len % hop_length) % hop_length
-        wrapped_phase = F.pad(wrapped_phase, (0, pad_length), "replicate")
-        wrapped_phase = wrapped_phase.view(batch, -1, hop_length)
+        blocks = (seq_len + hop_length - 1) // hop_length
 
         # make sure flow has seq_len / hop_length + 1 frames
-        if tables.shape[1] < wrapped_phase.shape[1] + 1:
+        if tables.shape[1] < blocks + 1:
             tables = F.pad(
                 tables,
-                (0, 0, 0, wrapped_phase.shape[1] - tables.shape[1] + 1),
+                (0, 0, 0, blocks - tables.shape[1] + 1),
                 "replicate",
             )
         else:
-            tables = tables[:, : wrapped_phase.shape[1] + 1]
+            tables = tables[:, : blocks + 1]
 
-        table_length = tables.shape[2]
-
-        table_index_raw = wrapped_phase * table_length
-        floor_index = table_index_raw.long().clip_(0, table_length - 1)
-
-        # shape = (batch, seq_len / hop_length, hop_length)
-        p = table_index_raw - floor_index
-
-        # shape = (batch, seq_len / hop_length + 1, table_length + 1)
         padded_tables = torch.cat([tables, tables[:, :, :1]], dim=2)
-        floor_flow = padded_tables[:, :-1]
-        ceil_flow = padded_tables[:, 1:]
-        p2 = (
+
+        # use F.grid_sample to interpolate
+        grid_x = wrapped_phase * 2 - 1
+        grid_y = (
             torch.arange(
-                hop_length, device=wrapped_phase.device, dtype=wrapped_phase.dtype
+                seq_len,
+                device=wrapped_phase.device,
+                dtype=wrapped_phase.dtype,
             )
-            / hop_length
+            .view(1, -1)
+            .broadcast_to(batch, -1)
+            / (hop_length * blocks)
+            * 2
+            - 1
         )
-
-        selected_floor_flow = (
-            floor_flow.gather(2, floor_index) * (1 - p)
-            + floor_flow.gather(2, floor_index + 1) * p
+        grid = torch.stack([grid_x, grid_y], dim=2).unsqueeze(2)
+        flow = (
+            F.grid_sample(
+                padded_tables.unsqueeze(1),
+                grid,
+                mode="bilinear",
+                align_corners=True,
+            )
+            .squeeze(-1)
+            .squeeze(1)
         )
-
-        # second, pick ceil flow
-        selected_ceil_flow = (
-            ceil_flow.gather(2, floor_index) * (1 - p)
-            + ceil_flow.gather(2, floor_index + 1) * p
-        )
-        final_flow = selected_floor_flow * (1 - p2) + selected_ceil_flow * p2
-        final_flow = final_flow.view(batch, -1)[:, :seq_len]
-        return AudioTensor(final_flow)
+        return AudioTensor(flow)
 
     def forward(
         self,

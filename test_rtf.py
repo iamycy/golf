@@ -11,12 +11,9 @@ import time
 
 # from frechet_audio_distance import FrechetAudioDistance
 
-from datasets.mpop600 import MPop600Dataset
-from loss.spec import MSSLoss
 from ltng.vocoder import DDSPVocoder
 from ltng.ae import VoiceAutoEncoder
 from models.audiotensor import AudioTensor
-from models.utils import ismir2interspeech_ckpt
 
 
 def get_instance(config):
@@ -35,7 +32,7 @@ def dict2object(config: dict):
     return config
 
 
-def ismir_rtf(model_configs, ckpt_path, device, x, test_duration, num):
+def load_ismir_ckpt(model_configs, ckpt_path, device):
     model_configs["feature_trsfm"]["init_args"]["sample_rate"] = model_configs[
         "sample_rate"
     ]
@@ -43,26 +40,99 @@ def ismir_rtf(model_configs, ckpt_path, device, x, test_duration, num):
     model_configs["feature_trsfm"]["init_args"]["hop_length"] = model_configs[
         "hop_length"
     ]
-    lpc_order = model_configs["decoder"]["init_args"]["harm_filter"]["init_args"][
-        "lpc_order"
-    ]
-    h_size = model_configs["decoder"]["init_args"]["harm_oscillator"]["init_args"][
-        "in_channels"
-    ]
+
+    def contains(d: dict, s: str) -> bool:
+        for k in d.keys():
+            if s in k:
+                return True
+            if isinstance(d[k], dict):
+                if contains(d[k], s):
+                    return True
+            elif isinstance(d[k], str):
+                if s in d[k]:
+                    return True
+        return False
+
+    if contains(model_configs, "DownsampledIndexedGlottalFlowTable"):
+        # GOLF
+        swap_weights = lambda voice_lpc, voice_gain, noise_lpc, noise_gain, h: (
+            h,
+            voice_gain,
+            voice_lpc,
+            noise_gain,
+            noise_lpc,
+        )
+
+        lpc_order = model_configs["decoder"]["init_args"]["harm_filter"]["init_args"][
+            "lpc_order"
+        ]
+        h_size = model_configs["decoder"]["init_args"]["harm_oscillator"]["init_args"][
+            "in_channels"
+        ]
+
+        old_split_sizes = [lpc_order, 1, lpc_order, 1, h_size]
+    elif contains(model_configs, "AdditivePulseTrain") and contains(
+        model_configs, "LTVMinimumPhaseFilter"
+    ):
+        # PULF
+        swap_weights = lambda voice_lpc, voice_gain, noise_lpc, noise_gain: (
+            voice_gain,
+            voice_lpc,
+            noise_gain,
+            noise_lpc,
+        )
+        harm_lpc_order = model_configs["decoder"]["init_args"]["harm_filter"][
+            "init_args"
+        ]["lpc_order"]
+        noise_lpc_order = model_configs["decoder"]["init_args"]["noise_filter"][
+            "init_args"
+        ]["lpc_order"]
+        old_split_sizes = [harm_lpc_order, 1, noise_lpc_order, 1]
+    else:
+        swap_weights = old_split_sizes = None
 
     model_configs = dict2object(model_configs)
     model = DDSPVocoder(**model_configs).to(device)
     ckpt = torch.load(ckpt_path, map_location=device)
 
     # remove "_kernel" from key
-    remover = lambda x: (
-        {k: remover(v) for k, v in x.items() if not k.endswith("_kernel")}
-        if isinstance(x, dict)
-        else x
-    )
-    state_dict = remover(ckpt["state_dict"])
-    state_dict = ismir2interspeech_ckpt(state_dict, lpc_order, h_size)
+    state_dict = {
+        k: v for k, v in ckpt["state_dict"].items() if not k.endswith("_kernel")
+    }
+    state_dict = {
+        k.replace("amplicudes", "amplitudes"): v for k, v in state_dict.items()
+    }
+
+    if old_split_sizes is not None:
+        size_sum = sum(old_split_sizes)
+        state_dict = {
+            k: (
+                torch.cat(
+                    [
+                        v[:-size_sum],
+                        torch.cat(
+                            list(
+                                swap_weights(
+                                    *torch.split(v[-size_sum:], old_split_sizes, dim=0)
+                                )
+                            ),
+                            dim=0,
+                        ),
+                    ],
+                    dim=0,
+                )
+                if "out_linear" in k
+                else v
+            )
+            for k, v in state_dict.items()
+        }
+
     model.load_state_dict(state_dict)
+    return model
+
+
+def ismir_rtf(model_configs, ckpt_path, device, x, test_duration, num):
+    model = load_ismir_ckpt(model_configs, ckpt_path, device)
     model.eval()
 
     # get mel

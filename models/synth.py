@@ -468,6 +468,21 @@ class AdditiveSynthesizer(HarmonicOscillator):
         return super().forward(phase, amplitudes, **kwargs)
 
 
+class V1AdditiveSynthesizer(HarmonicOscillator):
+    def __init__(self, num_harmonics: int = 150) -> None:
+        super().__init__()
+
+        self.ctrl = wrap_ctrl_fn(
+            split_size=(1, num_harmonics),
+            trsfm_fn=lambda log_gain, amplitudes_logits: (
+                torch.exp(log_gain)
+                * (lambda x: x / x.sum(-1, keepdim=True))(
+                    torch.sigmoid(amplitudes_logits)
+                ),
+            ),
+        )
+
+
 class SawToothOscillator(HarmonicOscillator):
     """synthesize audio with a bank of sawtooth oscillators"""
 
@@ -483,7 +498,9 @@ class SawToothOscillator(HarmonicOscillator):
         phase_offset: Optional[AudioTensor] = None,
         **kwargs,
     ) -> AudioTensor:
-        amplitudes = self.amplitudes[None, None, :].repeat(*phase.shape, 1)
+        amplitudes = phase.new_tensor(
+            self.amplitudes[None, None, :].repeat(*phase.shape, 1)
+        )
         return super().forward(phase, amplitudes, initial_phase, phase_offset)
 
 

@@ -5,7 +5,304 @@ import pyworld as pw
 from functools import partial
 import torch.nn.functional as F
 import math
-from typing import Callable, Optional, Tuple, Union, List
+from scipy.signal import get_window
+from typing import Any, Callable, Optional, Tuple, Union, List
+
+
+def ismir2interspeech_ckpt(ckpt: dict, lpc_order: int, h_size: int) -> dict:
+    def swap_weights(voice_lpc, voice_gain, noise_lpc, noise_gain, h):
+        return h, voice_gain, voice_lpc, noise_gain, noise_lpc
+
+    old_split_sizes = [lpc_order, 1, lpc_order, 1, h_size]
+    size_sum = sum(old_split_sizes)
+    return {
+        k: (
+            torch.cat(
+                [
+                    v[:-size_sum],
+                    torch.cat(
+                        list(
+                            swap_weights(
+                                *torch.split(v[-size_sum:], old_split_sizes, dim=0)
+                            )
+                        ),
+                        dim=0,
+                    ),
+                ],
+                dim=0,
+            )
+            if "out_linear" in k
+            else v
+        )
+        for k, v in ckpt.items()
+    }
+
+
+class LegacyAudioTensor(object):
+    def __init__(
+        self,
+        data: Union[Tensor, np.ndarray],
+        hop_length: int = 1,
+        **kwargs,
+    ):
+        self._data = torch.as_tensor(data, **kwargs)
+        self.hop_length = hop_length if self._data.ndim > 1 else 9223372036854775807
+
+    def __repr__(self):
+        return f"Hop-length: {self.hop_length}\n" + repr(self._data)
+
+    def __getitem__(self, index):
+        return LegacyAudioTensor(self._data[index], hop_length=self.hop_length)
+
+    def unfold(self, size: int, step: int = 1):
+        assert self.ndim == 2
+        return LegacyAudioTensor(
+            self._data.unfold(1, size, step), hop_length=self.hop_length * step
+        )
+
+    @property
+    def shape(self):
+        return self._data.shape
+
+    @property
+    def names(self):
+        return self._data.names
+
+    @property
+    def device(self):
+        return self._data.device
+
+    @property
+    def dtype(self):
+        return self._data.dtype
+
+    @property
+    def size(self):
+        return self._data.size
+
+    @property
+    def ndim(self):
+        return self._data.ndim
+
+    def dim(self):
+        return self._data.dim()
+
+    def __matmul__(self, other):
+        return torch.matmul(self, other)
+
+    def __rmatmul__(self, other):
+        return torch.matmul(other, self)
+
+    def __neg__(self):
+        return torch.neg(self)
+
+    def __add__(self, other):
+        return torch.add(self, other)
+
+    def __sub__(self, other):
+        return torch.sub(self, other)
+
+    def __mul__(self, other):
+        return torch.mul(self, other)
+
+    def __truediv__(self, other):
+        return torch.div(self, other)
+
+    def __floordiv__(self, other):
+        return torch.floor_divide(self, other)
+
+    def __mod__(self, other):
+        return torch.remainder(self, other)
+
+    def __radd__(self, other):
+        return torch.add(other, self)
+
+    def __rsub__(self, other):
+        return torch.sub(other, self)
+
+    def __rmul__(self, other):
+        return torch.mul(other, self)
+
+    def __rtruediv__(self, other):
+        return torch.div(other, self)
+
+    def __rfloordiv__(self, other):
+        return torch.floor_divide(other, self)
+
+    def __rmod__(self, other):
+        return torch.remainder(other, self)
+
+    def __lt__(self, other):
+        return torch.lt(self, other)
+
+    def __le__(self, other):
+        return torch.le(self, other)
+
+    def __gt__(self, other):
+        return torch.gt(self, other)
+
+    def __ge__(self, other):
+        return torch.ge(self, other)
+
+    def __eq__(self, other):
+        return torch.eq(self, other)
+
+    def __ne__(self, other):
+        return torch.ne(self, other)
+
+    def set_hop_length(self, hop_length: int):
+        assert hop_length > 0, "hop_length must be positive"
+        if hop_length > self.hop_length:
+            assert hop_length % self.hop_length == 0
+            return self.increase_hop_length(hop_length // self.hop_length)
+        elif hop_length < self.hop_length:
+            assert self.hop_length % hop_length == 0
+            return self.reduce_hop_length(self.hop_length // hop_length)
+        return self
+
+    def increase_hop_length(self, factor: int):
+        assert factor > 0, "factor must be positive"
+        if factor == 1 or self.ndim < 2:
+            return self
+
+        data = self._data[:, ::factor]
+        return LegacyAudioTensor(data, hop_length=self.hop_length * factor)
+
+    def reduce_hop_length(self, factor: int = None):
+        if factor is None:
+            factor = self.hop_length
+        else:
+            assert self.hop_length % factor == 0 and factor <= self.hop_length
+
+        if factor == 1 or self.ndim < 2:
+            return self
+
+        self_copy = self._data
+        # swap the time dimension to the last
+        if self.ndim > 2:
+            self_copy = self_copy.transpose(1, -1)
+        ctx = TimeContext(factor)
+        expand_self_copy = linear_upsample(ctx, self_copy)
+
+        # swap the time dimension back
+        if self.ndim > 2:
+            expand_self_copy = expand_self_copy.transpose(1, -1)
+
+        return LegacyAudioTensor(expand_self_copy, hop_length=self.hop_length // factor)
+
+    @property
+    def steps(self):
+        if self.ndim < 2:
+            return 1
+        return self._data.size(1)
+
+    def truncate(self, steps: int):
+        if steps >= self.steps:
+            return self
+        data = self._data.narrow(1, 0, steps)
+        return LegacyAudioTensor(data, hop_length=self.hop_length)
+
+    def as_tensor(self):
+        return self._data
+
+    def new_tensor(self, data: Tensor):
+        return LegacyAudioTensor(data, hop_length=self.hop_length)
+
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        if func in (
+            torch.add,
+            torch.mul,
+            torch.div,
+            torch.sub,
+            torch.floor_divide,
+            torch.remainder,
+            torch.lt,
+            torch.le,
+            torch.gt,
+            torch.ge,
+            torch.eq,
+            torch.ne,
+            torch.where,
+            torch.matmul,
+        ):
+            audio_tensors = tuple(a for a in args if isinstance(a, LegacyAudioTensor))
+            audio_tensors = LegacyAudioTensor.broadcasting(*audio_tensors)
+            min_steps = min(a.steps for a in audio_tensors)
+            audio_tensors = tuple(a.truncate(min_steps) for a in audio_tensors)
+            broadcasted_args = []
+            i = 0
+            for a in args:
+                if isinstance(a, LegacyAudioTensor):
+                    broadcasted_args.append(audio_tensors[i])
+                    i += 1
+                else:
+                    broadcasted_args.append(a)
+            args = broadcasted_args
+        elif func in (torch.cat, torch.stack):
+            raise NotImplementedError(
+                "LegacyAudioTensors do not support torch.cat and torch.stack"
+            )
+        if kwargs is None:
+            kwargs = {}
+        hop_lengths = []
+        for a in args:
+            if isinstance(a, LegacyAudioTensor):
+                hop_lengths.append(a.hop_length)
+            elif isinstance(a, (tuple, list)):
+                for aa in a:
+                    if isinstance(aa, LegacyAudioTensor):
+                        hop_lengths.append(aa.hop_length)
+
+        assert len(hop_lengths) > 0 and all(
+            h == hop_lengths[0] for h in hop_lengths
+        ), "All LegacyAudioTensors must have the same hop length but got {}".format(
+            ", ".join(str(h) for h in hop_lengths)
+        )
+        args = tuple(
+            a.as_tensor() if isinstance(a, LegacyAudioTensor) else a for a in args
+        )
+        ret = func(*args, **kwargs)
+        if isinstance(ret, torch.Tensor) and ret.ndim != 0 and len(hop_lengths) > 0:
+            return LegacyAudioTensor(ret, hop_length=hop_lengths[0])
+        return ret
+
+    @classmethod
+    def broadcasting(cls, *tensors):
+        assert len(tensors) > 0
+        # check hop lengths are divisible by each other
+        hop_lengths = tuple(t.hop_length for t in tensors)
+        minimum_hop_length = min(hop_lengths)
+        assert all(
+            h % minimum_hop_length == 0 for h in hop_lengths
+        ), "All hop lengths must be divisible by each other"
+        ret = tuple(
+            (
+                t.reduce_hop_length(t.hop_length // minimum_hop_length)
+                if t.hop_length > minimum_hop_length
+                else t
+            )
+            for t in tensors
+        )
+        max_ndim = max(t.ndim for t in ret)
+        ret = tuple(
+            (
+                t[(slice(None),) * t.ndim + (None,) * (max_ndim - t.ndim)]
+                if t.ndim < max_ndim
+                else t
+            )
+            for t in ret
+        )
+        return ret
+
+    def float(self):
+        return self.new_tensor(self._data.float())
+
+    def double(self):
+        return self.new_tensor(self._data.double())
+
+    def half(self):
+        return self.new_tensor(self._data.half())
 
 
 def get_transformed_lf(
@@ -63,6 +360,46 @@ def get_transformed_lf(
     return torch.cat([before, after])
 
 
+def get_transformed_lf_v2(Rd: torch.Tensor, points: int = 1024):
+    # the implementation is adapted from https://github.com/dsuedholt/vocal-tract-grad/blob/main/glottis.py
+    # Ra, Rk, and Rg are called R parameters in glottal flow modeling
+    # We can infer the values of Ra, Rk, and Rg from Rd
+    Rd = torch.as_tensor(Rd).view(-1, 1)
+    Ra = -0.01 + 0.048 * Rd
+    Rk = 0.224 + 0.118 * Rd
+    Rg = (Rk / 4) * (0.5 + 1.2 * Rk) / (0.11 * Rd - Ra * (0.5 + 1.2 * Rk))
+
+    # convert R parameters to Ta, Tp, and Te
+    # Ta: The return phase duration
+    # Tp: Time of the maximum of the pulse
+    # Te: Time of the minimum of the time-derivative of the pulse
+    Ta = Ra
+    Tp = 1 / (2 * Rg)
+    Te = Tp + Tp * Rk
+
+    epsilon = 1 / Ta
+    shift = torch.exp(-epsilon * (1 - Te))
+    delta = 1 - shift
+
+    rhs_integral = (1 / epsilon) * (shift - 1) + (1 - Te) * shift
+    rhs_integral /= delta
+
+    lower_integral = -(Te - Tp) / 2 + rhs_integral
+    upper_integral = -lower_integral
+
+    omega = torch.pi / Tp
+    s = torch.sin(omega * Te)
+    y = -torch.pi * s * upper_integral / (Tp * 2)
+    z = torch.log(y)
+    alpha = z / (Tp / 2 - Te)
+    EO = -1 / (s * torch.exp(alpha * Te))
+
+    t = torch.linspace(0, 1, points + 1)[None, :-1]
+    before = EO * torch.exp(alpha * t) * torch.sin(omega * t)
+    after = (-torch.exp(-epsilon * (t - Te)) + shift) / delta
+    return torch.where(t < Te, before, after).squeeze()
+
+
 def get_radiation_time_filter(
     num_zeros: int = 16, window_fn: Callable[[int], torch.Tensor] = None
 ):
@@ -87,7 +424,10 @@ def get_window_fn(window: str = "hann"):
     elif window == "bartlett":
         return torch.bartlett_window
     else:
-        raise ValueError(f"Unknown window function {window}")
+        try:
+            return lambda n: torch.tensor(get_window(window, n))
+        except:
+            raise ValueError(f"Unknown window function {window}")
 
 
 def fir_filt(x: torch.Tensor, h: torch.Tensor):
@@ -152,8 +492,8 @@ def get_logits2biquads(
 
         def logits2coeff(logits: Tensor) -> Tensor:
             assert logits.shape[-1] == 2
-            a1 = 2 * torch.tanh(logits[..., 0]) * max_abs_pole
-            a1_abs = a1.abs()
+            a1 = torch.tanh(logits[..., 0]) * max_abs_pole * 2
+            a1_abs = torch.abs(a1)
             a2 = 0.5 * (
                 (2 - a1_abs) * torch.tanh(logits[..., 1]) * max_abs_pole + a1_abs
             )
@@ -195,7 +535,7 @@ class TimeContext(object):
         return TimeContext(hop_length * self.hop_length)
 
 
-def linear_upsample(x: Tensor, ctx: TimeContext) -> Tensor:
+def linear_upsample(ctx: TimeContext, x: Tensor) -> Tensor:
     return F.interpolate(
         x.reshape(-1, 1, x.size(-1)),
         (x.size(-1) - 1) * ctx.hop_length + 1,
@@ -238,9 +578,24 @@ def freq2cent(f0):
     return 1200 * np.log2(f0 / 440)
 
 
+def rc2lpc(rc: Tensor) -> Tensor:
+    assert rc.ndim == 3
+    order = rc.shape[-1]
+    if order == 1:
+        return rc
+    k_0 = rc[..., :1]
+    current_lpc = torch.cat([torch.ones_like(k_0), k_0], dim=-1)
+
+    for n in range(1, order):
+        prev_lpc = torch.cat([current_lpc, torch.zeros_like(k_0)], dim=-1)
+        k_n = rc[..., n : n + 1]
+        current_lpc = prev_lpc + k_n * prev_lpc.flip(-1)
+    return current_lpc[..., 1:]
+
+
 get_f0 = partial(
     pw.dio,
-    f0_floor=65,
+    # f0_floor=65,
     f0_ceil=1047,
     channels_in_octave=2,
     frame_period=5,

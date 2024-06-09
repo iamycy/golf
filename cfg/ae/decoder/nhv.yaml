@@ -1,0 +1,27 @@
+decoder:
+  class_path: models.hpn.HarmonicPlusNoiseSynth
+  init_args:
+    harm_oscillator:
+      class_path: models.synth.AdditivePulseTrain
+      init_args:
+        num_harmonics: 155
+    noise_generator:
+      class_path: models.noise.StandardNormalNoise
+    noise_filter:
+      class_path: models.filters.LTVZeroPhaseFIRFilter
+      init_args:
+        window: hanning
+        n_mag: 256
+    harm_filter:
+      class_path: models.filters.LTVCepFilter
+      init_args:
+        n_fft: 1024
+        window: ${decoder.init_args.noise_filter.init_args.window}
+        filter_order: 240
+        hop_length: 240
+        phase: min
+    end_filter:
+      class_path: models.filters.LTIAcousticFilter
+      init_args:
+        length: 128
+        conv_method: fft

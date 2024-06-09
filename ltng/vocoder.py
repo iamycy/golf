@@ -1,18 +1,20 @@
-import pytorch_lightning as pl
-from pytorch_lightning.cli import LightningCLI, LightningArgumentParser
+import lightning.pytorch as pl
+from lightning.pytorch.cli import LightningCLI, LightningArgumentParser
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
 from typing import List, Dict, Tuple, Callable, Union
 from torchaudio.transforms import MelSpectrogram
 import numpy as np
-from frechet_audio_distance import FrechetAudioDistance
+import yaml
+from importlib import import_module
 
 from models.utils import get_window_fn
 from models.hpn import HarmonicPlusNoiseSynth
 from models.sf import SourceFilterSynth
 from models.enc import VocoderParameterEncoderInterface
-from models.utils import TimeContext, get_f0, freq2cent
+from models.utils import get_f0, freq2cent
+from models.audiotensor import AudioTensor
 
 
 class ScaledLogMelSpectrogram(MelSpectrogram):
@@ -24,10 +26,11 @@ class ScaledLogMelSpectrogram(MelSpectrogram):
 
     def forward(self, waveform: Tensor) -> Tensor:
         mel = super().forward(waveform).transpose(-1, -2)
+        mel = AudioTensor(mel, hop_length=self.hop_length)
         log_mel = torch.log(mel + 1e-8)
         if self.training:
-            self.log_mel_min.fill_(min(self.log_mel_min, log_mel.min().item()))
-            self.log_mel_max.fill_(max(self.log_mel_max, log_mel.max().item()))
+            self.log_mel_min.fill_(min(self.log_mel_min, torch.min(log_mel).item()))
+            self.log_mel_max.fill_(max(self.log_mel_max, torch.max(log_mel).item()))
         return (log_mel - self.log_mel_min) / (self.log_mel_max - self.log_mel_min)
 
 
@@ -75,10 +78,11 @@ class DDSPVocoderCLI(LightningCLI):
 class DDSPVocoder(pl.LightningModule):
     def __init__(
         self,
-        encoder: VocoderParameterEncoderInterface,
-        decoder: Union[HarmonicPlusNoiseSynth, SourceFilterSynth],
+        decoder: Union[SourceFilterSynth, HarmonicPlusNoiseSynth],
         feature_trsfm: ScaledLogMelSpectrogram,
         criterion: nn.Module,
+        encoder_class_path: str = "models.enc.VocoderParameterEncoderInterface",
+        encoder_init_args: Dict = {},
         window: str = "hanning",
         sample_rate: int = 24000,
         hop_length: int = 120,
@@ -88,13 +92,25 @@ class DDSPVocoder(pl.LightningModule):
         l1_loss_weight: float = 0.0,
         f0_loss_weight: float = 1.0,
         voicing_loss_weight: float = 1.0,
+        inverse_target: bool = False,
     ):
         super().__init__()
 
-        self.encoder = encoder
+        # self.save_hyperparameters()
+
         self.decoder = decoder
         self.criterion = criterion
         self.feature_trsfm = feature_trsfm
+
+        module_path, class_name = encoder_class_path.rsplit(".", 1)
+        module = import_module(module_path)
+        split_sizes, trsfms, args_keys = self.decoder.split_sizes_and_trsfms
+        self.encoder = getattr(module, class_name)(
+            split_sizes=split_sizes,
+            trsfms=trsfms,
+            args_keys=args_keys,
+            **encoder_init_args,
+        )
 
         self.sample_rate = sample_rate
         self.hop_length = hop_length
@@ -104,33 +120,41 @@ class DDSPVocoder(pl.LightningModule):
         self.detach_f0 = detach_f0
         self.detach_voicing = detach_voicing
         self.train_with_true_f0 = train_with_true_f0
+        self.inverse_target = inverse_target
 
     def forward(self, feats: torch.Tensor):
-        (
-            f0_params,
-            *other_params,
-        ) = self.encoder(feats)
+        # (f0, *other_params, voicing_logits) = self.encoder(feats)
+        params = self.encoder(feats)
 
-        f0, *voicing_param = f0_params
-        phase_params = (f0 / self.sample_rate,)
-        if len(voicing_param) > 0:
-            voicing_logits = voicing_param[0]
-            phase_params = phase_params + (voicing_logits.sigmoid(),)
+        f0 = params.pop("f0")
+        params["phase"] = f0 / self.sample_rate
 
-        ctx = TimeContext(self.hop_length)
+        voicing_logits = params.pop("voicing_logits", None)
+        if voicing_logits is not None:
+            params["voicing"] = torch.sigmoid(voicing_logits)
 
         return (
             f0,
-            *voicing_param,
-            self.decoder(
-                ctx,
-                phase_params,
-                *other_params,
-            ),
+            self.decoder(**params),
+            params.get("voicing", None),
         )
 
     def f0_loss(self, f0_hat, f0):
         return F.l1_loss(torch.log(f0_hat + 1e-3), torch.log(f0 + 1e-3))
+
+    def on_train_start(self) -> None:
+        if self.logger is not None:
+            self.logger.watch(self.encoder, log_freq=1000, log="all", log_graph=False)
+            if len(tuple(self.decoder.parameters())) > 0:
+                self.logger.watch(
+                    self.decoder, log_freq=1000, log="all", log_graph=False
+                )
+
+    def on_train_end(self) -> None:
+        if self.logger is not None:
+            self.logger.experiment.unwatch(self.encoder)
+            if len(tuple(self.decoder.parameters())) > 0:
+                self.logger.experiment.unwatch(self.decoder)
 
     def training_step(self, batch, batch_idx):
         x, f0_in_hz = batch
@@ -140,27 +164,22 @@ class DDSPVocoder(pl.LightningModule):
         low_res_mask = mask[:, :: self.hop_length]
 
         feats = self.feature_trsfm(x)
-        (
-            f0_params,
-            *other_params,
-        ) = self.encoder(feats)
-
-        f0_hat, *voicing_param = f0_params
+        (f0_hat, *other_params, voicing_logits) = self.encoder(feats)
 
         minimum_length = min(f0_hat.shape[1], low_res_f0.shape[1])
         low_res_f0 = low_res_f0[:, :minimum_length]
         low_res_mask = low_res_mask[:, :minimum_length]
         f0_hat = f0_hat[:, :minimum_length]
 
-        if len(voicing_param) > 0:
-            voicing_logits = voicing_param[0][:, :minimum_length]
+        if voicing_logits is not None:
+            voicing_logits = voicing_logits[:, :minimum_length]
             voicing = torch.sigmoid(
-                voicing_logits.detach() if self.detach_voicing else voicing_logits
+                torch.detach(voicing_logits) if self.detach_voicing else voicing_logits
             )
         else:
             voicing = None
 
-        f0_for_decoder = f0_hat.detach() if self.detach_f0 else f0_hat
+        f0_for_decoder = torch.detach(f0_hat) if self.detach_f0 else f0_hat
 
         if self.train_with_true_f0:
             phase = (
@@ -169,13 +188,22 @@ class DDSPVocoder(pl.LightningModule):
         else:
             phase = f0_for_decoder / self.sample_rate
 
-        phase_params = (phase,) if voicing is None else (phase, voicing)
-        ctx = TimeContext(self.hop_length)
-        x_hat = self.decoder(
-            ctx,
-            phase_params,
-            *other_params,
-        )
+        if self.inverse_target:
+            x_hat, invesre_x = self.decoder(
+                phase,
+                *other_params,
+                voicing=voicing,
+                target=AudioTensor(x),
+            )
+            x_hat = x_hat.as_tensor()
+            x = invesre_x.as_tensor()
+        else:
+            x_hat = self.decoder(
+                phase,
+                *other_params,
+                voicing=voicing,
+            ).as_tensor()
+        # f0_hat = f0_hat.as_tensor().rename(None)
 
         x = x[..., : x_hat.shape[-1]]
         mask = mask[:, : x_hat.shape[1]]
@@ -199,8 +227,11 @@ class DDSPVocoder(pl.LightningModule):
             if self.voicing_loss_weight > 0:
                 loss = loss + voicing_loss
 
-        self.log("train_loss", loss, prog_bar=False, sync_dist=True)
+        self.log("train_loss", loss, prog_bar=True, sync_dist=True)
         return loss
+
+    def on_validation_epoch_start(self) -> None:
+        self.tmp_val_outputs = []
 
     def validation_step(self, batch, batch_idx):
         x, f0_in_hz = batch
@@ -209,8 +240,11 @@ class DDSPVocoder(pl.LightningModule):
         num_nonzero = mask.count_nonzero()
 
         feats = self.feature_trsfm(x)
-        f0_hat, *_, x_hat = self(feats)
+        f0_hat, x_hat, voicing = self(feats)
+        f0_hat = f0_hat.as_tensor()
+        x_hat = x_hat.as_tensor()
 
+        x_hat = x_hat[:, : x.shape[-1]]
         x = x[..., : x_hat.shape[-1]]
         mask = mask[:, : x_hat.shape[1]]
         loss = self.criterion(x_hat, x)
@@ -218,7 +252,7 @@ class DDSPVocoder(pl.LightningModule):
 
         f0_in_hz = f0_in_hz[:, :: self.hop_length]
         f0_mask = mask[:, :: self.hop_length]
-        minimum_length = min(f0_hat.shape[1], f0_in_hz.shape[1])
+        minimum_length = min(f0_hat.shape[1], f0_in_hz.shape[1], f0_mask.shape[1])
         f0_in_hz = f0_in_hz[:, :minimum_length]
         f0_mask = f0_mask[:, :minimum_length]
         f0_hat = f0_hat[:, :minimum_length]
@@ -229,20 +263,22 @@ class DDSPVocoder(pl.LightningModule):
         if self.f0_loss_weight > 0:
             loss = loss + f0_loss * self.f0_loss_weight
 
-        if len(_) > 0:
-            voicing_logits = _[0][:, :minimum_length]
-            voicing_loss = F.binary_cross_entropy_with_logits(
-                voicing_logits, f0_mask.float()
-            )
-            self.log("val_voicing_loss", voicing_loss, prog_bar=False, sync_dist=True)
+        if voicing is not None:
+            voicing = voicing.as_tensor()[:, :minimum_length]
+            voicing_loss = F.binary_cross_entropy(voicing, f0_mask.float())
             if self.voicing_loss_weight > 0:
                 loss = loss + voicing_loss
 
-            return loss, l1_loss, f0_loss, voicing_loss
+            self.tmp_val_outputs.append((loss, l1_loss, f0_loss, voicing_loss))
 
-        return loss, l1_loss, f0_loss
+            return loss
 
-    def validation_epoch_end(self, outputs) -> None:
+        self.tmp_val_outputs.append((loss, l1_loss, f0_loss))
+
+        return loss
+
+    def on_validation_epoch_end(self) -> None:
+        outputs = self.tmp_val_outputs
         avg_loss = sum(x[0] for x in outputs) / len(outputs)
         avg_l1_loss = sum(x[1] for x in outputs) / len(outputs)
         avg_f0_loss = sum(x[2] for x in outputs) / len(outputs)
@@ -256,6 +292,7 @@ class DDSPVocoder(pl.LightningModule):
             self.log(
                 "val_voicing_loss", avg_voicing_loss, prog_bar=False, sync_dist=True
             )
+        delattr(self, "tmp_val_outputs")
 
     def on_test_start(self) -> None:
         frechet = FrechetAudioDistance(
@@ -264,6 +301,8 @@ class DDSPVocoder(pl.LightningModule):
         frechet.model = frechet.model.to(self.device)
         self.frechet = frechet
 
+        self.tmp_test_outputs = []
+
         return super().on_test_start()
 
     def test_step(self, batch, batch_idx):
@@ -271,7 +310,8 @@ class DDSPVocoder(pl.LightningModule):
         f0_in_hz = f0_in_hz[:, :: self.hop_length].cpu().numpy()
 
         feats = self.feature_trsfm(x)
-        *_, x_hat = self(feats)
+        _, x_hat, _ = self(feats)
+        x_hat = x_hat.as_tensor()
 
         x = x[..., : x_hat.shape[-1]]
         mss_loss = self.criterion(x_hat, x).item()
@@ -302,9 +342,12 @@ class DDSPVocoder(pl.LightningModule):
         f0_hat = np.maximum(f0_hat, 80)
         f0_loss = np.mean(np.abs(freq2cent(f0_hat) - freq2cent(f0_in_hz)))
 
+        self.tmp_test_outputs.append((mss_loss, f0_loss, x_true_embs, x_hat_embs, N))
+
         return mss_loss, f0_loss, x_true_embs, x_hat_embs, N
 
-    def test_epoch_end(self, outputs) -> None:
+    def on_test_epoch_end(self) -> None:
+        outputs = self.tmp_test_outputs
         weights = [x[4] for x in outputs]
         avg_mss_loss = np.average([x[0] for x in outputs], weights=weights)
         avg_f0_loss = np.average([x[1] for x in outputs], weights=weights)
@@ -329,4 +372,5 @@ class DDSPVocoder(pl.LightningModule):
             prog_bar=True,
             sync_dist=True,
         )
+        delattr(self, "tmp_test_outputs")
         return

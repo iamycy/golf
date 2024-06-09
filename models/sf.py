@@ -1,67 +1,64 @@
 import torch
-from torch import nn, Tensor
-from typing import Optional, Tuple
+from torch import nn
+import torch.nn.functional as F
+from typing import Optional, Tuple, Union
 
 from .synth import OscillatorInterface
-from .filters import LTVFilterInterface
+from .filters import LTVFilterInterface, FilterInterface
 from .noise import NoiseInterface
-from .utils import TimeContext, linear_upsample
+from .audiotensor import AudioTensor
+from .ctrl import PassThrough, Synth
 
 
-class SourceFilterSynth(nn.Module):
+class SourceFilterSynth(Synth):
     def __init__(
         self,
         harm_oscillator: OscillatorInterface,
         noise_generator: NoiseInterface,
-        noise_filter: LTVFilterInterface,
-        end_filter: LTVFilterInterface,
-        harm_filter: Optional[LTVFilterInterface] = None,
-        use_noise_filter_on_harm: bool = False,
+        noise_filter: Union[LTVFilterInterface, PassThrough],
+        end_filter: Union[LTVFilterInterface, PassThrough],
+        room_filter: Union[FilterInterface, PassThrough] = None,
+        subtract_harmonics: bool = True,
     ):
         super().__init__()
+        self.subtract_harmonics = subtract_harmonics
 
         # Time-varying components
         self.harm_oscillator = harm_oscillator
         self.noise_generator = noise_generator
         self.noise_filter = noise_filter
-        self.harm_filter = harm_filter
         self.end_filter = end_filter
-        self.use_noise_filter_on_harm = use_noise_filter_on_harm
+
+        # Room filter
+        self.room_filter = room_filter if room_filter is not None else PassThrough()
 
     def forward(
         self,
-        ctx: TimeContext,
-        phase_params: Tuple[Tensor, Optional[Tensor]],
-        harm_osc_params: Tuple[Tensor, ...],
-        noise_filt_params: Tuple[Tensor, ...],
-        end_filt_params: Tuple[Tensor, ...],
-        harm_filt_params: Tuple[Tensor, ...] = None,
-        noise_params: Tuple[Tensor, ...] = (),
-    ) -> Tensor:
-        """
-        Args:
-            phase: (batch_size, samples)
-        """
-        phase, *_ = phase_params
-        assert torch.all(phase >= 0) and torch.all(phase <= 0.5)
-        upsampled_phase = linear_upsample(phase, ctx)
-
+        phase: AudioTensor,
+        harm_oscillator_params: Tuple[AudioTensor, ...],
+        noise_generator_params: Tuple[AudioTensor, ...],
+        noise_filter_params: Tuple[AudioTensor, ...],
+        end_filter_params: Tuple[AudioTensor, ...],
+        voicing: Optional[AudioTensor] = None,
+        target: Optional[AudioTensor] = None,
+        **other_params
+    ) -> AudioTensor:
         # Time-varying components
-        harm_osc = self.harm_oscillator(upsampled_phase, *harm_osc_params, ctx=ctx)
-        if len(_):
-            voicing = _[0]
+        harm_osc = self.harm_oscillator(phase, *harm_oscillator_params)
+        if voicing is not None:
             assert torch.all(voicing >= 0) and torch.all(voicing <= 1)
-            upsampled_voicing = linear_upsample(voicing, ctx)
-            harm_osc = harm_osc * upsampled_voicing[:, : harm_osc.shape[1]]
+            voicing = F.threshold(voicing, 0.5, 0)
+            harm_osc = harm_osc * voicing
 
-        noise = self.noise_generator(harm_osc, *noise_params, ctx=ctx)
+        src = harm_osc + self.noise_filter(
+            self.noise_generator(harm_osc, *noise_generator_params),
+            *noise_filter_params
+        )
 
-        if self.harm_filter is not None:
-            harm_osc = self.harm_filter(harm_osc, *harm_filt_params, ctx=ctx)
-        elif self.use_noise_filter_on_harm:
-            filtered = self.noise_filter(harm_osc, *noise_filt_params, ctx=ctx)
-            harm_osc = harm_osc[:, : filtered.shape[1]] + filtered
+        if self.subtract_harmonics:
+            src = src - self.noise_filter(harm_osc, *noise_filter_params)
 
-        noise = self.noise_filter(noise, *noise_filt_params, ctx=ctx)
-
-        return self.end_filter(harm_osc + noise, *end_filt_params, ctx=ctx)
+        if target is not None:
+            src, target_src = self.end_filter.reverse(src, target, *end_filter_params)
+            return src, target_src
+        return self.room_filter(self.end_filter(src, *end_filter_params))

@@ -68,19 +68,14 @@ trainer:
   multiple_trainloader_mode: max_size_cycle
   inference_mode: true
 model:
-  encoder:
-    class_path: models.enc.SawSing
-    init_args:
-      voice_n_mag: 256
-      noise_n_mag: 80
-      extra_split_sizes: []
-      kwargs:
-        learn_voicing: true
-        backbone_type: models.mel.Mel2Control
-        in_channels: 80
-        hidden_channels: 96
-        num_layers: 3
-        dropout: 0.1
+  encoder_class_path: models.enc.VocoderParameterEncoderInterface
+  encoder_init_args:
+    backbone_type: models.mel.Mel2Control
+    learn_voicing: true
+    in_channels: 80
+    hidden_channels: 96
+    num_layers: 3
+    dropout: 0.1
   decoder:
     class_path: models.hpn.HarmonicPlusNoiseSynth
     init_args:
@@ -96,12 +91,15 @@ model:
         init_args:
           window: hanning
           conv_method: direct
+          n_mag: 256
       noise_filter:
         class_path: models.filters.LTVZeroPhaseFIRFilter
         init_args:
           window: hanning
           conv_method: direct
-      end_filter: null
+          n_mag: 80
+      end_filter: 
+        class_path: models.ctrl.PassThrough
   feature_trsfm:
     class_path: ltng.vocoder.ScaledLogMelSpectrogram
     init_args:

@@ -1,0 +1,21 @@
+decoder:
+  class_path: models.hpn.HarmonicPlusNoiseSynth
+  init_args:
+    harm_oscillator:
+      class_path: models.synth.AdditiveSynthesizer
+      init_args:
+        num_harmonics: 155
+    noise_generator:
+      class_path: models.noise.StandardNormalNoise
+    harm_filter:
+      class_path: models.ctrl.PassThrough
+    noise_filter:
+      class_path: models.filters.LTVZeroPhaseFIRFilter
+      init_args:
+        window: hanning
+        n_mag: 256
+    end_filter:
+      class_path: models.filters.LTIAcousticFilter
+      init_args:
+        length: 128
+        conv_method: fft

@@ -2,9 +2,17 @@ import torch
 from torch import nn, Tensor
 import math
 from importlib import import_module
-from typing import Optional, Union, List, Tuple, Callable, Any
+from typing import Optional, Union, List, Tuple, Callable, Any, Dict
+from torchaudio.transforms import Spectrogram
+from itertools import accumulate, tee
 
-from .utils import get_logits2biquads, biquads2lpc, TimeContext
+from .utils import get_logits2biquads, biquads2lpc, rc2lpc, get_window_fn
+from .audiotensor import AudioTensor
+
+def pairwise(iterable):
+    a, b = tee(iterable)
+    next(b, None)
+    return zip(a, b)
 
 
 class BackboneModelInterface(nn.Module):
@@ -15,368 +23,164 @@ class BackboneModelInterface(nn.Module):
     def __init__(self, linear_in_channels: int, linear_out_channels: int):
         super().__init__()
         self.out_linear = nn.Linear(linear_in_channels, linear_out_channels)
+        self.out_linear.weight.data.zero_()
+        self.out_linear.bias.data.zero_()
 
     def forward(self, x: Tensor) -> Tensor:
         return self.out_linear(x)
 
 
 class VocoderParameterEncoderInterface(nn.Module):
-    split_size: List[int]
-    log_f0_min: float
-    log_f0_max: float
-    backbone: BackboneModelInterface
-
     def __init__(
         self,
         backbone_type: str,
         learn_voicing: bool = False,
+        learn_f0: bool = True,
         f0_min: float = 80,
         f0_max: float = 1000,
-        extra_split_sizes: List[int] = [],
+        split_sizes: Tuple[Tuple[int, ...], ...] = (),
+        trsfms: Tuple[Callable[..., Tuple[torch.Tensor, ...]], ...] = (),
+        args_keys: Tuple[str, ...] = (),
         **kwargs,
     ):
         super().__init__()
-        extra_split_sizes = ([1, 1] if learn_voicing else [1]) + extra_split_sizes
-        self.split_size = extra_split_sizes
-        self.learn_voicing = learn_voicing
-        self.log_f0_min = math.log(f0_min)
-        self.log_f0_max = math.log(f0_max)
+
+        append_before = lambda x, cond, y: (y,) + x if cond else x
+        append_one = lambda x, cond: append_before(x, cond, (1,))
+
+        self.split_sizes = append_one(append_one(split_sizes, learn_voicing), learn_f0)
+        self.trsfms = append_before(
+            append_before(trsfms, learn_voicing, lambda x: x),
+            learn_f0,
+            lambda logits: torch.exp(
+                torch.sigmoid(logits) * (math.log(f0_max) - math.log(f0_min))
+                + math.log(f0_min)
+            ),
+        )
+        self.args_keys = append_before(
+            append_before(args_keys, learn_voicing, "voicing_logits"),
+            learn_f0,
+            "f0",
+        )
 
         module_path, class_name = backbone_type.rsplit(".", 1)
         module = import_module(module_path)
 
         self.backbone = getattr(module, class_name)(
-            out_channels=sum(self.split_size), **kwargs
+            out_channels=sum(sum(self.split_sizes, ())), **kwargs
         )
-
-    def logits2f0(self, logits: Tensor) -> Tensor:
-        return torch.exp(
-            logits.sigmoid() * (self.log_f0_max - self.log_f0_min) + self.log_f0_min
-        )
+        # self.backbone = torch.compile(self.backbone)
 
     def forward(
-        self, h: Tensor
-    ) -> Tuple[Tuple[Tensor, Optional[Tensor]], ...,]:
-        """
-        Args:
-            h: (batch_size, frames, features)
-        Returns:
-            harm_osc_params: Tuple[Tensor, ...]
-            harm_filt_params: Tuple[Tensor, ...]
-            noise_filt_params: Tuple[Tensor, ...]
-            noise_params: Tuple[Tensor, ...]
-        """
-        f0_logits, *_ = self.backbone(h).split(self.split_size, dim=-1)
-        f0 = self.logits2f0(f0_logits).squeeze(-1)
-        if self.learn_voicing:
-            _ = (_[0].squeeze(-1), *_[1:])
-        return (f0,) + tuple(_)
+        self, x: AudioTensor, *args: Any, **kwargs: Any
+    ) -> Dict[str, Union[AudioTensor, Tuple[AudioTensor]]]:
+        h = self.backbone(x, *args, **kwargs)
+        logits = [
+            h.new_tensor(torch.squeeze(t, 2))
+            for t in torch.split(h, sum(self.split_sizes, ()), dim=2)
+        ]
+        params = dict(
+            zip(
+                self.args_keys,
+                map(
+                    lambda f, args: f(*args),
+                    self.trsfms,
+                    (
+                        logits[i:j]
+                        for i, j in pairwise(
+                            accumulate(
+                                map(lambda x: len(x), self.split_sizes), initial=0
+                            )
+                        )
+                    ),
+                ),
+            )
+        )
+
+        return params
 
 
-class GlottalComplexConjLPCEncoder(VocoderParameterEncoderInterface):
+class F0EnergyEncoder(BackboneModelInterface):
     def __init__(
         self,
-        voice_lpc_order: int,
-        noise_lpc_order: int,
-        table_weight_hidden_size: int,
-        *args,
-        max_abs_value: float = 0.99,
-        use_snr: bool = False,
-        extra_split_sizes: List[int] = [],
-        kwargs: dict = {},
+        out_channels: int,
+        sr: int = 24000,
+        n_fft: int = 2048,
+        win_length: int = 960,
+        window: str = "hanning",
+        hop_length: int = 240,
+        num_bands: int = 150,
+        lstm_hidden_size: int = 128,
+        **lstm_kwargs,
     ):
-        assert voice_lpc_order % 2 == 0
-        assert noise_lpc_order % 2 == 0
-
-        extra_split_sizes.extend(
-            [
-                voice_lpc_order,
-                1,
-                noise_lpc_order,
-                1,
-                table_weight_hidden_size,
-            ]
-        )
-        super().__init__(
-            *args,
-            extra_split_sizes=extra_split_sizes,
-            **kwargs,
-        )
-        self.use_snr = use_snr
-        self.logits2biquads = get_logits2biquads("conj", max_abs_value)
-        self.backbone.out_linear.weight.data.zero_()
-
-        offset = 1 if self.learn_voicing else 0
-        self.backbone.out_linear.bias.data[
-            offset + 1 : offset + 1 + voice_lpc_order : 2
-        ] = -10  # initialize magnitude close to zero
-        self.backbone.out_linear.bias.data[
-            offset + 1 + voice_lpc_order
-        ] = 0  # initialize gain
-        self.backbone.out_linear.bias.data[
-            offset
-            + 1
-            + voice_lpc_order
-            + 1 : offset
-            + 1
-            + voice_lpc_order
-            + 1
-            + noise_lpc_order : 2
-        ] = -10  # initialize magnitude close to zero
-        if use_snr:
-            self.backbone.out_linear.bias.data[
-                offset + 1 + voice_lpc_order + 1 + noise_lpc_order
-            ] = 20
-        else:
-            self.backbone.out_linear.bias.data[
-                offset + 2 + voice_lpc_order + noise_lpc_order
-            ] = -10
-
-    def forward(
-        self, h: Tensor
-    ) -> Tuple[
-        Tuple[Tensor, Optional[Tensor]],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-    ]:
-        batch, frames, _ = h.shape
-        (
-            *f0_params,
-            voice_lpc_logits,
-            voice_log_gain,
-            noise_lpc_logits,
-            noise_log_gain,
-            h,
-        ) = super().forward(h)
-        voice_biquads = self.logits2biquads(voice_lpc_logits.view(batch, frames, -1, 2))
-        noise_biquads = self.logits2biquads(noise_lpc_logits.view(batch, frames, -1, 2))
-        voice_lpc_coeffs = biquads2lpc(voice_biquads)
-        noise_lpc_coeffs = biquads2lpc(noise_biquads)
-
-        if self.use_snr:
-            log_snr = noise_log_gain
-            noise_log_gain = voice_log_gain - log_snr * 0.5
-
-        voice_gain = voice_log_gain.squeeze(-1).exp()
-        noise_gain = noise_log_gain.squeeze(-1).exp()
-
-        return (
-            f0_params,
-            (h,),
-            (voice_gain, voice_lpc_coeffs),
-            (noise_gain, noise_lpc_coeffs),
-            (),
+        super().__init__(lstm_hidden_size * 2, out_channels)
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.sr = sr
+        self.num_bands = num_bands
+        self.freq_interval = sr / n_fft
+        self.spectrogram = Spectrogram(
+            n_fft=n_fft,
+            win_length=win_length,
+            window_fn=get_window_fn(window),
+            hop_length=hop_length,
+            center=True,
         )
 
-
-class GlottalRealCoeffLPCEncoder(GlottalComplexConjLPCEncoder):
-    def __init__(
-        self,
-        voice_lpc_order: int,
-        noise_lpc_order: int,
-        *args,
-        max_abs_value: float = 0.99,
-        **kwargs,
-    ):
-        super().__init__(
-            voice_lpc_order,
-            noise_lpc_order,
-            *args,
-            max_abs_value=max_abs_value,
-            **kwargs,
+        self.lstm = nn.LSTM(
+            num_bands * 2 + 1,
+            lstm_hidden_size,
+            batch_first=True,
+            bidirectional=True,
+            **lstm_kwargs,
         )
-        self.logits2biquads = get_logits2biquads("coef", max_abs_value)
-        offset = 1 if self.learn_voicing else 0
-        self.backbone.out_linear.bias.data[
-            offset + 1 : offset + 1 + voice_lpc_order :
-        ] = 0
-        self.backbone.out_linear.bias.data[
-            offset
-            + 1
-            + voice_lpc_order
-            + 1 : offset
-            + 1
-            + voice_lpc_order
-            + 1
-            + noise_lpc_order :
-        ] = 0
+        self.norm = nn.LayerNorm(lstm_hidden_size * 2)
 
+        self.register_buffer("log_energy_min", torch.tensor(torch.inf))
+        self.register_buffer("log_energy_max", torch.tensor(-torch.inf))
 
-class SawSing(VocoderParameterEncoderInterface):
-    def __init__(
-        self,
-        voice_n_mag: int,
-        noise_n_mag: int,
-        *args,
-        extra_split_sizes: List[int] = [],
-        kwargs: dict = {},
-    ):
-        super().__init__(
-            *args,
-            extra_split_sizes=extra_split_sizes + [voice_n_mag, noise_n_mag],
-            **kwargs,
+    def forward(self, x: AudioTensor, f0: AudioTensor) -> AudioTensor:
+        assert x.hop_length == 1
+        spec = self.spectrogram(x.as_tensor()).mT
+        spec[..., -1] = 0
+        f0 = f0.set_hop_length(self.hop_length).truncate(spec.size(1)).as_tensor()
+        spec = spec[:, : f0.size(1)]
+        f0_nonzero = torch.where(f0 > 0, f0, self.sr / self.num_bands * 0.5)
+        harms = f0_nonzero.unsqueeze(-1) * torch.arange(
+            1, self.num_bands + 0.5, 0.5, device=f0.device
         )
-
-    def forward(
-        self, h: Tensor
-    ) -> Tuple[
-        Tuple[Tensor, Optional[Tensor]],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-    ]:
-        *f0_params, voice_log_mag, noise_log_mag = super().forward(h)
-
-        return (
-            f0_params,
-            (),
-            (voice_log_mag,),
-            (noise_log_mag,),
-            (),
+        harms = torch.cat([harms[..., :1] * 0.5, harms], dim=-1)
+        harms_index = (
+            torch.round(harms / self.freq_interval).long().clip(0, spec.size(-1) - 1)
         )
-
-
-class DDSPAdd(VocoderParameterEncoderInterface):
-    def __init__(
-        self,
-        num_harmonics: int,
-        noise_n_mag: int,
-        *args,
-        extra_split_sizes: List[int] = [],
-        kwargs: dict = {},
-    ):
-        super().__init__(
-            *args,
-            extra_split_sizes=extra_split_sizes + [1, num_harmonics, noise_n_mag],
-            **kwargs,
+        flatten_indexes = (
+            (
+                torch.arange(
+                    spec.shape[0], device=harms_index.device, dtype=harms_index.dtype
+                ).unsqueeze(-1)
+                * spec.shape[1]
+                + torch.arange(
+                    spec.shape[1], device=harms_index.device, dtype=harms_index.dtype
+                )
+            ).unsqueeze(-1)
+            * spec.shape[2]
+            + harms_index
+        ).flatten()
+        harms_energy = spec.flatten()[flatten_indexes].reshape(*harms_index.shape)
+        log_energy = torch.log(harms_energy + 1e-8)
+        if self.training:
+            self.log_energy_min.fill_(
+                min(self.log_energy_min, torch.min(log_energy).item())
+            )
+            self.log_energy_max.fill_(
+                max(self.log_energy_max, torch.max(log_energy).item())
+            )
+        feature = (log_energy - self.log_energy_min) / (
+            self.log_energy_max - self.log_energy_min
         )
+        log_f0 = torch.log(f0_nonzero)
+        feature = torch.cat([feature, log_f0.unsqueeze(-1)], dim=-1)
 
-        self.backbone.out_linear.weight.data.zero_()
-        offset = 1 if self.learn_voicing else 0
-        self.backbone.out_linear.bias.data[
-            offset : offset + 1 + num_harmonics
-        ] = 0  # initialize f0
-        self.backbone.out_linear.bias.data[
-            offset + 1 + num_harmonics :
-        ] = -10  # initialize magnitude close to zero
-
-    def forward(
-        self, h: Tensor
-    ) -> Tuple[
-        Tuple[Tensor, Optional[Tensor]],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-    ]:
-        *f0_params, log_loudness, harmonics_logits, noise_log_mag = super().forward(h)
-        loudness = log_loudness.exp()
-        # harmonics = harmonics_logits.softmax(-1)
-        harmonics = harmonics_logits.sigmoid()
-        harmonics = harmonics / harmonics.sum(-1, keepdim=True)
-        amplitudes = harmonics * loudness
-
-        return (
-            f0_params,
-            (amplitudes,),
-            (),
-            (noise_log_mag,),
-            (),
-        )
-
-
-class MLSAEnc(VocoderParameterEncoderInterface):
-    def __init__(
-        self,
-        sp_mcep_order: int,
-        ap_mcep_order: int,
-        *args,
-        extra_split_sizes: List[int] = [],
-        kwargs: dict = {},
-    ):
-        super().__init__(
-            *args,
-            extra_split_sizes=extra_split_sizes
-            + [sp_mcep_order + 1, ap_mcep_order + 1],
-            **kwargs,
-        )
-
-        self.backbone.out_linear.weight.data.zero_()
-        self.backbone.out_linear.bias.data.zero_()
-
-    def forward(
-        self, h: Tensor
-    ) -> Tuple[
-        Tuple[Tensor, Optional[Tensor]],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-    ]:
-        *f0_params, sp_mc, ap_mc_logits = super().forward(h)
-        ap_mc = ap_mc_logits.sigmoid()
-
-        return (
-            f0_params,
-            (),
-            (ap_mc,),
-            (sp_mc,),
-        )
-
-
-class PulseTrainRealCoeffLPCEncoder(VocoderParameterEncoderInterface):
-    def __init__(
-        self,
-        voice_lpc_order: int,
-        noise_lpc_order: int,
-        *args,
-        max_abs_value: float = 0.99,
-        extra_split_sizes: List[int] = [],
-        kwargs: dict = {},
-    ):
-        super().__init__(
-            *args,
-            extra_split_sizes=extra_split_sizes
-            + [voice_lpc_order, 1, noise_lpc_order, 1],
-            **kwargs,
-        )
-
-        self.logits2biquads = get_logits2biquads("coef", max_abs_value)
-        self.backbone.out_linear.weight.data.zero_()
-        self.backbone.out_linear.bias.data.zero_()
-        self.backbone.out_linear.bias.data[-1] = -10  # initialize noise gain
-
-    def forward(
-        self, h: Tensor
-    ) -> Tuple[
-        Tuple[Tensor, Optional[Tensor]],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-        Tuple[Any, ...],
-    ]:
-        batch, frames, _ = h.shape
-        (
-            *f0_params,
-            voice_lpc_logits,
-            voice_log_gain,
-            noise_lpc_logits,
-            noise_log_gain,
-        ) = super().forward(h)
-        voice_biquads = self.logits2biquads(voice_lpc_logits.view(batch, frames, -1, 2))
-        noise_biquads = self.logits2biquads(noise_lpc_logits.view(batch, frames, -1, 2))
-        voice_lpc_coeffs = biquads2lpc(voice_biquads)
-        noise_lpc_coeffs = biquads2lpc(noise_biquads)
-
-        voice_gain = voice_log_gain.squeeze(-1).exp()
-        noise_gain = noise_log_gain.squeeze(-1).exp()
-
-        return (
-            f0_params,
-            (),
-            (voice_gain, voice_lpc_coeffs),
-            (noise_gain, noise_lpc_coeffs),
-            (),
-        )
+        h = self.lstm(feature)[0]
+        h = self.norm(h)
+        return AudioTensor(super().forward(h), hop_length=self.hop_length)

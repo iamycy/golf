@@ -1,0 +1,83 @@
+# pytorch_lightning==1.9.4
+seed_everything: 2434
+trainer:
+  max_steps: 1000000
+  num_sanity_val_steps: 0
+  check_val_every_n_epoch: 2
+  gradient_clip_val: 0.5
+  strategy: auto
+  accelerator: gpu
+  devices: 1
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        save_last: true
+        monitor: val_loss
+        save_on_train_epoch_end: false
+        filename: '{epoch}-{step}-{val_loss:.3f}'
+        save_top_k: 3
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: train_loss
+        patience: 2000
+        mode: min
+        check_finite: true
+        check_on_train_epoch_end: true
+  logger:
+    class_path: lightning.pytorch.loggers.wandb.WandbLogger
+    init_args:
+      # entity: iamycy
+      project: vctk-ae
+      log_model: false
+model:
+  encoder_class_path: models.enc.VocoderParameterEncoderInterface
+  encoder_init_args:
+    f0_min: 60.0
+    f0_max: 1000.0
+    backbone_type: models.unet.UNetEncoder
+    n_fft: 1024
+    hop_length: 240
+    channels:
+    - 32
+    - 64
+    - 128
+    - 256
+    strides:
+    - 4
+    - 4
+    - 4
+    - 4
+    lstm_hidden_size: 256
+    num_layers: 3
+    dropout: 0.1
+    learn_voicing: false
+    learn_f0: false
+  decoder: null
+  criterion:
+    class_path: loss.spec.MSSLoss
+    init_args:
+      n_ffts:
+        - 509
+        - 1021
+        - 2053
+      alpha: 1.0
+      window: hanning
+      center: true
+  sample_rate: 24000
+  voicing_loss_weight: 1.0
+  f0_loss_weight: 1.0
+  detach_voicing: true
+  detach_f0: true
+  train_with_true_f0: true
+ckpt_path: null
+data:
+  class_path: ltng.data.VCTK
+  init_args:
+    batch_size: 64
+    wav_dir:  /import/c4dm-datasets-ext/ycy_artefacts/VCTK-24k/
+    duration: 2.0
+    overlap: 1.5
+optimizer:
+  class_path: torch.optim.Adam
+  init_args:
+    lr: 0.0001

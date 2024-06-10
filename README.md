@@ -1,7 +1,8 @@
 # GlOttal-flow LPC Filter (GOLF)
 [![arXiv](https://img.shields.io/badge/arXiv-2306.17252-00ff00.svg)](https://arxiv.org/abs/2306.17252)
+[![arXiv](https://img.shields.io/badge/arXiv-2406.05128-00ff00.svg)](https://arxiv.org/abs/2406.05128)
 
-The accompanying code for the paper [Differentiable Time-Varying Linear Prediction in the Context of End-to-End Analysis-by-Synthesis]() (accepted at Interspeech 2024) and [Singing Voice Synthesis Using Differentiable LPC and Glottal-Flow-Inspired Wavetables](https://zenodo.org/records/10265377) (published at ISMIR 2023).
+The accompanying code for the paper [Differentiable Time-Varying Linear Prediction in the Context of End-to-End Analysis-by-Synthesis](https://arxiv.org/abs/2406.05128) (accepted at Interspeech 2024) and [Singing Voice Synthesis Using Differentiable LPC and Glottal-Flow-Inspired Wavetables](https://zenodo.org/records/10265377) (published at ISMIR 2023).
 
 ## Training
 
@@ -27,5 +28,14 @@ If you find this code useful, please consider citing the following papers:
     booktitle={Proc. International Society for Music Information Retrieval},
     year={2023},
     pages={667--675}
+}
+
+@misc{ycy2024golf,
+    title = {Differentiable Time-Varying Linear Prediction in the Context of End-to-End Analysis-by-Synthesis},
+    author = {Yu, Chin-Yun and Fazekas, György},
+    year={2024},
+    eprint={2406.05128},
+    archivePrefix={arXiv},
+    primaryClass={eess.AS}
 }
 ```

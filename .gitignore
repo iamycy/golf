@@ -16,3 +16,4 @@ m4-comparison/
 vctk-comparison/
 vctk-ae/
 interspeech_listening_test/
+*.pt

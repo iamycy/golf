@@ -1,4 +1,4 @@
-# GlOttal-flow LPC Filter (GOLF)
+# GlOttal-flow LPC Filter (GOLF) for Voice Synthesis
 [![arXiv](https://img.shields.io/badge/arXiv-2306.17252-00ff00.svg)](https://arxiv.org/abs/2306.17252)
 [![arXiv](https://img.shields.io/badge/arXiv-2406.05128-00ff00.svg)](https://arxiv.org/abs/2406.05128)
 
@@ -102,9 +102,14 @@ python autoencode.py predict -c cfg/pyworld.yaml --trainer.logger false --seed_e
 
 The checkpoints we used for evaluation are provided [here](ckpts/interspeech24).
 
+## Additional links
+
+- [Individual FAD and PESQ scores on each test speaker](https://docs.google.com/spreadsheets/d/1E_2AVUXLITRd1R5oolYvcYwKqAB5YJ_V_jWVkQKx-VQ/edit?usp=sharing)
+- [MCD and MSS comparison table on W&B](https://api.wandb.ai/links/iamycy/qa1pckb0)
+
 ## Notes
 
-- The latest version of the code should be capable of loading the old checkpoints (under `ckpts/`), but the training for the v1 vocoder is not guaranteed to work. If you want to use the old code base that was made for the ISMIR 2023 paper, please checkout the [ismir23](https://github.com/yoyololicon/golf/releases/tag/ismir23) tag or commit `6d323da`.
+- The latest version of the code should be capable of loading the old checkpoints (under `ckpts/ismir23`), but the training for the v1 vocoder is not guaranteed to work. If you want to use the old code base that was made for the ISMIR 2023 paper, please checkout the [ismir23](https://github.com/yoyololicon/golf/releases/tag/ismir23) tag or commit `6d323da`.
 
 
 ## Citation

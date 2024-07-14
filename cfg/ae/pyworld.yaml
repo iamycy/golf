@@ -1,0 +1,33 @@
+seed_everything: false
+trainer:
+  strategy: auto
+  accelerator: gpu
+  devices: 1
+  logger:
+    class_path: lightning.pytorch.loggers.wandb.WandbLogger
+    init_args:
+      # entity: iamycy
+      project: vctk-ae-eval
+      log_model: false
+model:
+  class_path: ltng.world_ae.WORLDAutoEncoder
+  init_args:
+    sample_rate: 24000
+    hop_length: 240
+    criterion:
+      class_path: loss.spec.MSSLoss
+      init_args:
+        n_ffts:
+          - 509
+          - 1021
+          - 2053
+        alpha: 1.0
+        window: hanning
+        center: true
+data:
+  class_path: ltng.data.VCTK
+  init_args:
+    batch_size: 32
+    wav_dir: /mnt/Data/Datasets/VCTK-Corpus-0.92-raw/24k-mic1/
+    duration: 2.0
+    overlap: 0

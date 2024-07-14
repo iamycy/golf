@@ -8,7 +8,7 @@ mos_data/
 zips/
 legacy/
 wandb/
-*golf*/
+sf-golf/
 lpcnet/
 .vscode/
 m4-comparison/

@@ -21,7 +21,24 @@ python scripts/wav2f0.py data/vctk --f0-floor 60
 
 ## Training
 
-The instructions on how to train and evaluate the model will be provided soon.
+Below is the command to train each models in the Interspeech [paper](https://arxiv.org/abs/2406.05128).
+
+```bash
+python autoencode.py fit --model ltng.ae.VoiceAutoEncoder --config cfg/vctk.yaml --model cfg/ae/decoder/{MODEL}.yaml --trainer.logger false
+```
+
+The `{MODEL}` corresponds to the following models:
+- `ddsp` $\rightarrow$ DDSP
+- `nhv` $\rightarrow$ NHV (Neural Homomorphic Vocoder)
+- `world` $\rightarrow$ $\nabla$ WORLD
+- `mlsa` $\rightarrow$ MLSA (differentiable Mel-cepstral synthesis filter)
+- `golf-v1` $\rightarrow$ GOLF-v1
+- `golf` $\rightarrow$ GOLF-ff
+- `golf-precise` $\rightarrow$ GOLF-ss
+
+By default, the checkpoints are automatically saved under `checkpoints/` directory. 
+Feel free to remove `--trainer.logger false` and edit the logger settings in the configuration file `cfg/vctk.yaml` to fit your needs.
+Please checkout the LightningCLI instructions [here](https://lightning.ai/docs/pytorch/stable/cli/lightning_cli_advanced.html).
 
 ## Evaluation
 

@@ -58,7 +58,7 @@ For PESQ/FAD evaluation, you'll first need to store the synthesised waveforms in
 python autoencode.py predict -c {YOUR_CONFIG}.yaml --ckpt_path {YOUR_CHECKPOINT}.ckpt --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=autoencode.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
 ```
 
-Make a new directory with the eight speakers from the test set of VCTK, like the following:
+Make a new directory and copy the following eight speakers, which form the test set, from `data/vctk`.
 ```
 data/vctk_test
 ├── p360
@@ -89,7 +89,18 @@ We use [fadtk](https://github.com/microsoft/fadtk) and [descript audio codec](ht
 
 Please use the checkpoints trained with `golf.yaml` for the GOLF-fs model. Append `--model.decoder.end_filter models.filters.LTVMinimumPhaseFilterPrecise` to the evaluation commands above (`test/predict`) to use the sample-wise filter.
 
+### Notes on non-differentiable WORLD (`pyworld`)
+
+Please use the following commands to evaluate the non-differentiable WORLD model.
+
+```bash
+python autoencode.py test -c cfg/pyworld.yaml --data.wav_dir data/vctk --model ltng.world_ae.WORLDAutoEncoder
+python autoencode.py predict -c cfg/pyworld.yaml --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=autoencode.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
+```
+
 ## Checkpoints
+
+The checkpoints we used for evaluation are provided [here](ckpts/interspeech24).
 
 ## Notes
 

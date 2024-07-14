@@ -29,7 +29,7 @@ python autoencode.py fit --model ltng.ae.VoiceAutoEncoder --config cfg/vctk.yaml
 
 The `{MODEL}` corresponds to the following models:
 - `ddsp` $\rightarrow$ DDSP
-- `nhv` $\rightarrow$ NHV (Neural Homomorphic Vocoder)
+- `nhv` $\rightarrow$ NHV (neural homomorphic vocoder)
 - `world` $\rightarrow$ $\nabla$ WORLD
 - `mlsa` $\rightarrow$ MLSA (differentiable Mel-cepstral synthesis filter)
 - `golf-v1` $\rightarrow$ GOLF-v1
@@ -41,6 +41,53 @@ Feel free to remove `--trainer.logger false` and edit the logger settings in the
 Please checkout the LightningCLI instructions [here](https://lightning.ai/docs/pytorch/stable/cli/lightning_cli_advanced.html).
 
 ## Evaluation
+
+### MCD/MSS
+
+After training the models, you can evaluate the models using the following command. Replace `{YOUR_CONFIG}` and `{YOUR_CHECKPOINT}` with the corresponding configuration file and checkpoint.
+
+```bash
+python autoencode.py test --model ltng.ae.VoiceAutoEncoder -c {YOUR_CONFIG}.yaml --ckpt_path {YOUR_CHECKPOINT}.ckpt --data.duration 2 --data.overlap 0 --seed_everything false --data.wav_dir data/vctk --data.batch_size 32 --trainer.logger false
+```
+
+### PESQ/FAD
+
+For PESQ/FAD evaluation, you'll first need to store the synthesised waveforms in a directory. Replace `{YOUR_CONFIG}`, `{YOUR_CHECKPOINT}`, and `{YOUR_OUTPUT_DIR}` with the corresponding configuration file, checkpoint, and output directory.
+
+```bash
+python autoencode.py predict -c {YOUR_CONFIG}.yaml --ckpt_path {YOUR_CHECKPOINT}.ckpt --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=autoencode.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
+```
+
+Make a new directory with the eight speakers from the test set of VCTK, like the following:
+```
+data/vctk_test
+├── p360
+├── p361
+├── p362
+├── p363
+├── p364
+├── p374
+├── p376
+├── s5
+```
+
+Then, caculate the PESQ scores:
+    
+```bash
+python eval_pesq.py data/vctk_test {YOUR_OUTPUT_DIR}
+```
+
+For the FAD scores:
+
+```bash
+python fad.py data/vctk_test {YOUR_OUTPUT_DIR}
+```
+
+We use [fadtk](https://github.com/microsoft/fadtk) and [descript audio codec](https://github.com/descriptinc/descript-audio-codec) for the FAD evaluation. 
+
+### Notes on GOLF-fs
+
+Please use the checkpoints trained with `golf.yaml` for the GOLF-fs model. Append `--model.decoder.end_filter models.filters.LTVMinimumPhaseFilterPrecise` to the evaluation commands above (`test/predict`) to use the sample-wise filter.
 
 ## Checkpoints
 

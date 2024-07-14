@@ -4,6 +4,21 @@
 
 The accompanying code for the paper [Differentiable Time-Varying Linear Prediction in the Context of End-to-End Analysis-by-Synthesis](https://arxiv.org/abs/2406.05128) (accepted at Interspeech 2024) and [Singing Voice Synthesis Using Differentiable LPC and Glottal-Flow-Inspired Wavetables](https://zenodo.org/records/10265377) (published at ISMIR 2023).
 
+## Data preparation
+
+### VCTK
+
+1. Download the VCTK 0.92 dataset from [here](https://datashare.is.ed.ac.uk/handle/10283/3443).
+2. Extract the dataset to a directory, e.g., `data/vctk`.
+3. Run the following command to resample the dataset to 24 kHz wave files. The resampled files will be saved in the same directory with the original files.
+```bash
+python scripts/resample_dir.py data/vctk --suffix .flac --sr 24000
+```
+4. Extract the foundamental frequency (F0). The f0s will be saved as `.pv` file in the same directory with the original files using 5 ms hop size.
+```bash
+python scripts/wav2f0.py data/vctk --f0-floor 60
+```
+
 ## Training
 
 The instructions on how to train and evaluate the model will be provided soon.

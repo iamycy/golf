@@ -1,0 +1,202 @@
+# lightning.pytorch==2.1.3
+seed_everything: 2434
+trainer:
+  accelerator: gpu
+  strategy: auto
+  devices: 1
+  num_nodes: 1
+  precision: null
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      name: null
+      save_dir: .
+      version: null
+      offline: false
+      dir: null
+      id: null
+      anonymous: null
+      project: vctk-ae
+      log_model: false
+      experiment: null
+      prefix: ''
+      checkpoint_name: null
+      job_type: null
+      config: null
+      entity: null
+      reinit: null
+      tags: null
+      group: null
+      notes: null
+      magic: null
+      config_exclude_keys: null
+      config_include_keys: null
+      mode: null
+      allow_val_change: null
+      resume: null
+      force: null
+      tensorboard: null
+      sync_tensorboard: null
+      monitor_gym: null
+      save_code: null
+      settings: null
+  callbacks:
+  - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+    init_args:
+      dirpath: null
+      filename: '{epoch}-{step}-{val_loss:.3f}'
+      monitor: val_loss
+      verbose: false
+      save_last: true
+      save_top_k: 3
+      save_weights_only: false
+      mode: min
+      auto_insert_metric_name: true
+      every_n_train_steps: null
+      train_time_interval: null
+      every_n_epochs: null
+      save_on_train_epoch_end: false
+      enable_version_counter: true
+  fast_dev_run: false
+  max_epochs: null
+  min_epochs: null
+  max_steps: 1000000
+  min_steps: null
+  max_time: null
+  limit_train_batches: null
+  limit_val_batches: null
+  limit_test_batches: null
+  limit_predict_batches: null
+  overfit_batches: 0.0
+  val_check_interval: null
+  check_val_every_n_epoch: 2
+  num_sanity_val_steps: 0
+  log_every_n_steps: 1
+  enable_checkpointing: null
+  enable_progress_bar: null
+  enable_model_summary: null
+  accumulate_grad_batches: 1
+  gradient_clip_val: 0.5
+  gradient_clip_algorithm: null
+  deterministic: null
+  benchmark: null
+  inference_mode: true
+  use_distributed_sampler: true
+  profiler: null
+  detect_anomaly: false
+  barebones: false
+  plugins: null
+  sync_batchnorm: false
+  reload_dataloaders_every_n_epochs: 0
+  default_root_dir: null
+model:
+  decoder:
+    class_path: models.sf.SourceFilterSynth
+    init_args:
+      harm_oscillator:
+        class_path: models.synth.DownsampledIndexedGlottalFlowTable
+        init_args:
+          hop_rate: 10
+          in_channels: 64
+          oversampling: 4
+          equal_energy: true
+          table_size: 100
+          table_type: derivative
+          normalize_method: constant_power
+          align_peak: true
+          trainable: false
+          min_R_d: 0.3
+          max_R_d: 2.7
+          lf_v2: true
+          points: 2048
+      noise_generator:
+        class_path: models.noise.StandardNormalNoise
+      noise_filter:
+        class_path: models.filters.LTVZeroPhaseFIRFilter
+        init_args:
+          window: hanning
+          conv_method: direct
+          n_mag: 256
+      end_filter:
+        class_path: models.filters.LTVMinimumPhaseFilterPrecise
+        init_args:
+          lpc_order: 22
+          lpc_parameterisation: rc2lpc
+          max_abs_value: 1.0
+      room_filter:
+        class_path: models.filters.LTIAcousticFilter
+        init_args:
+          length: 128
+          conv_method: fft
+      subtract_harmonics: false
+  criterion:
+    class_path: loss.spec.MSSLoss
+    init_args:
+      n_ffts:
+      - 509
+      - 1021
+      - 2053
+      alpha: 1.0
+      ratio: 1.0
+      overlap: 0.75
+      window: hanning
+      win_length: null
+      pad: 0
+      normalized: false
+      wkwargs: null
+      center: true
+      pad_mode: reflect
+      onesided: true
+      return_complex: null
+  encoder_class_path: models.enc.VocoderParameterEncoderInterface
+  encoder_init_args:
+    f0_min: 60.0
+    f0_max: 1000.0
+    backbone_type: models.unet.UNetEncoder
+    n_fft: 1024
+    hop_length: 240
+    channels:
+    - 32
+    - 64
+    - 128
+    - 256
+    strides:
+    - 4
+    - 4
+    - 4
+    - 4
+    lstm_hidden_size: 256
+    num_layers: 3
+    dropout: 0.1
+    learn_voicing: false
+    learn_f0: false
+  sample_rate: 24000
+  detach_f0: true
+  detach_voicing: true
+  train_with_true_f0: true
+  f0_loss_weight: 1.0
+  voicing_loss_weight: 1.0
+ckpt_path: vctk-ae/7oyeedae/checkpoints/epoch=359-step=664560-val_loss=3.077.ckpt
+data:
+  class_path: ltng.data.VCTK
+  init_args:
+    batch_size: 64
+    wav_dir: /import/c4dm-datasets-ext/ycy_artefacts/VCTK-24k/
+    duration: 2.0
+    overlap: 1.5
+    f0_suffix: .pv
+optimizer:
+  class_path: torch.optim.Adam
+  init_args:
+    lr: 0.0001
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+    weight_decay: 0.0
+    amsgrad: false
+    foreach: null
+    maximize: false
+    capturable: false
+    differentiable: false
+    fused: null

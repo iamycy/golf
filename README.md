@@ -102,10 +102,21 @@ python autoencode.py predict -c cfg/pyworld.yaml --trainer.logger false --seed_e
 
 The checkpoints we used for evaluation are provided [here](ckpts/interspeech24).
 
+## Real-time factor
+
+Use the following command to benchmark the real-time factor of the models. Replace `{YOUR_CONFIG}` and `{YOUR_CHECKPOINT}` with the corresponding configuration file and checkpoint. Add `--cuda` to benchmark on GPU.
+
+```bash
+python test_rtf.py {YOUR_CONFIG}.yaml {YOUR_CHECKPOINT}.ckpt {EXAMPLE_FILE}.wav
+```
+
 ## Additional links
 
-- [Individual FAD and PESQ scores on each test speaker](https://docs.google.com/spreadsheets/d/1E_2AVUXLITRd1R5oolYvcYwKqAB5YJ_V_jWVkQKx-VQ/edit?usp=sharing)
+- [Individual FAD on each test speaker and PESQ scores](https://docs.google.com/spreadsheets/d/1E_2AVUXLITRd1R5oolYvcYwKqAB5YJ_V_jWVkQKx-VQ/edit?usp=sharing)
 - [MCD and MSS comparison table on W&B](https://api.wandb.ai/links/iamycy/qa1pckb0)
+- [Interspeech Figure 2 and some ablation observations](notebooks/interspeech/compare-spec-env.ipynb)
+- [Script to synthesise listening test samples](notebooks/interspeech/listening-samples.ipynb)
+- [Script to calculate MUSHURA scores and ANOVA](notebooks/interspeech/mushura.ipynb)
 
 ## Notes
 

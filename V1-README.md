@@ -56,8 +56,8 @@ python test_rtf.py config.yaml checkpoint.ckpt test.wav
 
 ## Additional links
 
-- [compute MUSHURA scores given the rating file from GO Listen](notebooks/ismir/mushura.ipynb)
-- [time-domain l2 experiment](notebooks/ismir/time_l2.ipynb)
+- [Compute MUSHURA scores given the rating file from GO Listen](notebooks/ismir/mushura.ipynb)
+- [Time-domain l2 experiment](notebooks/ismir/time_l2.ipynb)
 
 
 ## Citation

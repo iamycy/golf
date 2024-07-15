@@ -90,6 +90,7 @@ model:
         init_args:
           window: hanning
           window_length: 480
+          centred: false
           lpc_order: 26
           lpc_parameterisation: coef
           max_abs_value: 0.99
@@ -98,6 +99,7 @@ model:
         init_args:
           window: hanning
           window_length: 480
+          centred: false
           lpc_order: 22
           lpc_parameterisation: coef
           max_abs_value: 0.99

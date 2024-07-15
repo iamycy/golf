@@ -118,6 +118,7 @@ class LTVMinimumPhaseFilter(LTVMinimumPhaseFilterPrecise):
         self,
         window: str,
         window_length: int,
+        centred: bool = True,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -125,6 +126,7 @@ class LTVMinimumPhaseFilter(LTVMinimumPhaseFilterPrecise):
         self.register_buffer(
             "_kernel", torch.diag(window).unsqueeze(1), persistent=False
         )
+        self.centred = centred
 
     def forward(self, ex: AudioTensor, gain: AudioTensor, a: AudioTensor):
         """
@@ -140,7 +142,7 @@ class LTVMinimumPhaseFilter(LTVMinimumPhaseFilterPrecise):
 
         window_size = self._kernel.shape[0]
         assert window_size >= hop_length * 2, f"{window_size} < {hop_length * 2}"
-        padding = window_size // 2
+        padding = window_size // 2 if self.centred else (window_size - hop_length) // 2
 
         ex = ex * gain
         ex = F.pad(

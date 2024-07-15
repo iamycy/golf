@@ -8,6 +8,7 @@ from torchaudio.transforms import MelSpectrogram
 import numpy as np
 import yaml
 from importlib import import_module
+from typing import Any, Mapping
 
 from models.utils import get_window_fn
 from models.hpn import HarmonicPlusNoiseSynth
@@ -295,12 +296,6 @@ class DDSPVocoder(pl.LightningModule):
         delattr(self, "tmp_val_outputs")
 
     def on_test_start(self) -> None:
-        frechet = FrechetAudioDistance(
-            use_pca=False, use_activation=False, verbose=True
-        )
-        frechet.model = frechet.model.to(self.device)
-        self.frechet = frechet
-
         self.tmp_test_outputs = []
 
         return super().on_test_start()
@@ -320,21 +315,10 @@ class DDSPVocoder(pl.LightningModule):
         x = x.cpu().numpy().astype(np.float64)
         N = x_hat.shape[0]
         f0_hat_list = []
-        x_true_embs = []
-        x_hat_embs = []
         for i in range(N):
-            f0_hat, _ = get_f0(x_hat[i], self.sample_rate)
+            f0_hat, _ = get_f0(x_hat[i], self.sample_rate, f0_floor=65)
             f0_hat_list.append(f0_hat)
 
-            x_hat_emb = (
-                self.frechet.model.forward(x_hat[i], self.sample_rate).cpu().numpy()
-            )
-            x_hat_embs.append(x_hat_emb)
-            x_emb = self.frechet.model.forward(x[i], self.sample_rate).cpu().numpy()
-            x_true_embs.append(x_emb)
-
-        x_true_embs = np.concatenate(x_true_embs, axis=0)
-        x_hat_embs = np.concatenate(x_hat_embs, axis=0)
         f0_hat = np.stack(f0_hat_list, axis=0)
         f0_in_hz = f0_in_hz[:, : f0_hat.shape[1]]
         f0_hat = f0_hat[:, : f0_in_hz.shape[1]]
@@ -342,32 +326,20 @@ class DDSPVocoder(pl.LightningModule):
         f0_hat = np.maximum(f0_hat, 80)
         f0_loss = np.mean(np.abs(freq2cent(f0_hat) - freq2cent(f0_in_hz)))
 
-        self.tmp_test_outputs.append((mss_loss, f0_loss, x_true_embs, x_hat_embs, N))
+        self.tmp_test_outputs.append((mss_loss, f0_loss, N))
 
-        return mss_loss, f0_loss, x_true_embs, x_hat_embs, N
+        return mss_loss, f0_loss, N
 
     def on_test_epoch_end(self) -> None:
         outputs = self.tmp_test_outputs
-        weights = [x[4] for x in outputs]
+        weights = [x[-1] for x in outputs]
         avg_mss_loss = np.average([x[0] for x in outputs], weights=weights)
         avg_f0_loss = np.average([x[1] for x in outputs], weights=weights)
-
-        x_true_embs = np.concatenate([x[2] for x in outputs], axis=0)
-        x_hat_embs = np.concatenate([x[3] for x in outputs], axis=0)
-
-        mu_background, sigma_background = self.frechet.calculate_embd_statistics(
-            x_hat_embs
-        )
-        mu_eval, sigma_eval = self.frechet.calculate_embd_statistics(x_true_embs)
-        fad_score = self.frechet.calculate_frechet_distance(
-            mu_background, sigma_background, mu_eval, sigma_eval
-        )
 
         self.log_dict(
             {
                 "avg_mss_loss": avg_mss_loss,
                 "avg_f0_loss": avg_f0_loss,
-                "fad_score": fad_score,
             },
             prog_bar=True,
             sync_dist=True,

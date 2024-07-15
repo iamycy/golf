@@ -142,9 +142,9 @@ class LTVMinimumPhaseFilter(LTVMinimumPhaseFilterPrecise):
 
         window_size = self._kernel.shape[0]
         assert window_size >= hop_length * 2, f"{window_size} < {hop_length * 2}"
-        padding = window_size // 2 if self.centred else (window_size - hop_length) // 2
+        padding = window_size // 2
 
-        ex = ex * gain
+        ex = (ex if self.centred else ex[..., hop_length // 2 :]) * gain
         ex = F.pad(
             ex,
             (padding,) * 2,
@@ -174,11 +174,14 @@ class LTVMinimumPhaseFilter(LTVMinimumPhaseFilterPrecise):
             tmp, self._kernel, stride=hop_length, padding=padding
         ).squeeze(1)
 
-        y = tmp[:-1]
-        norm = tmp[-1]
+        tmp, norm = tmp[:-1], tmp[-1]
 
         # normalize
-        return AudioTensor(y / norm)
+        y = tmp / norm
+        if not self.centred:
+            y = F.pad(y, (hop_length // 2, 0), "reflect")
+
+        return AudioTensor(y)
 
     def reverse(
         self, ex: AudioTensor, y: AudioTensor, gain: AudioTensor, a: AudioTensor

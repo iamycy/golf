@@ -88,12 +88,13 @@ if __name__ == "__main__":
         # subclass_mode_model=True,
         trainer_defaults={
             "accelerator": "gpu",
-            "strategy": DDPStrategy(find_unused_parameters=False),
+            "strategy": {
+                "class_path": "lightning.pytorch.strategies.DDPStrategy",
+                "init_args": {
+                    "find_unused_parameters": False,
+                },
+            },
             "log_every_n_steps": 1,
-            # "logger": WandbLogger(
-            #     project="golf",
-            #     log_model="all",
-            # ),
         },
         save_config_callback=MyConfigCallback,
         # save_config_kwargs={"overwrite": False, "config_filename": "config.yaml"},

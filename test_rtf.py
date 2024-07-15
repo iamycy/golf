@@ -128,7 +128,8 @@ def load_ismir_ckpt(model_configs, ckpt_path, device):
         }
 
     model.load_state_dict(state_dict)
-    return model
+    ckpt["state_dict"] = state_dict
+    return model, ckpt
 
 
 def ismir_rtf(model_configs, ckpt_path, device, x, test_duration, num):

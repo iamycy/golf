@@ -4,6 +4,9 @@
 
 The accompanying code for the papers [Differentiable Time-Varying Linear Prediction in the Context of End-to-End Analysis-by-Synthesis](https://arxiv.org/abs/2406.05128) (accepted at Interspeech 2024) and [Singing Voice Synthesis Using Differentiable LPC and Glottal-Flow-Inspired Wavetables](https://zenodo.org/records/10265377) (published at ISMIR 2023).
 
+The following instructions are for the Interspeech 2024 paper. For the ISMIR 2023 paper, please refer to this [readme](V1-README.md).
+
+
 ## Data preparation
 
 ### VCTK
@@ -118,9 +121,7 @@ python test_rtf.py {YOUR_CONFIG}.yaml {YOUR_CHECKPOINT}.ckpt {EXAMPLE_FILE}.wav
 - [Script to synthesise listening test samples](notebooks/interspeech/listening-samples.ipynb)
 - [Script to calculate MUSHURA scores and ANOVA](notebooks/interspeech/mushura.ipynb)
 
-## Notes
 
-- The latest version of the code should be capable of loading the old checkpoints (under `ckpts/ismir23`), but the training for the v1 vocoder is not guaranteed to work. If you want to use the old code base that was made for the ISMIR 2023 paper, please checkout the [ismir23](https://github.com/yoyololicon/golf/releases/tag/ismir23) tag or commit `6d323da`.
 
 
 ## Citation

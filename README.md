@@ -74,7 +74,7 @@ data/vctk_test
 ├── s5
 ```
 
-Then, caculate the PESQ scores:
+Then, calculate the PESQ scores:
     
 ```bash
 python eval_pesq.py data/vctk_test {YOUR_OUTPUT_DIR}

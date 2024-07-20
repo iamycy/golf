@@ -16,3 +16,4 @@ soxr
 soundfile
 fadtk
 pesq
+torchlpc

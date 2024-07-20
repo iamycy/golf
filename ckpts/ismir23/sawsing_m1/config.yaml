@@ -4,34 +4,28 @@ trainer:
   logger: true
   enable_checkpointing: true
   callbacks:
-  - class_path: pytorch_lightning.callbacks.ModelCheckpoint
-    init_args:
-      dirpath: null
-      filename: null
-      monitor: val_loss
-      verbose: false
-      save_last: true
-      save_top_k: 1
-      save_weights_only: false
-      mode: min
-      auto_insert_metric_name: true
-      every_n_train_steps: null
-      train_time_interval: null
-      every_n_epochs: null
-      save_on_train_epoch_end: false
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: null
+        filename: "{epoch}-{step}-{val_loss:.3f}"
+        monitor: val_loss
+        verbose: false
+        save_last: true
+        save_top_k: 3
+        save_weights_only: false
+        mode: min
+        auto_insert_metric_name: true
+        every_n_train_steps: null
+        train_time_interval: null
+        every_n_epochs: null
+        save_on_train_epoch_end: false
   default_root_dir: null
   gradient_clip_val: null
   gradient_clip_algorithm: null
   num_nodes: 1
-  num_processes: null
-  devices: null
-  gpus: 1
-  auto_select_gpus: null
-  tpu_cores: null
-  ipus: null
+  devices: 1
   enable_progress_bar: true
   overfit_batches: 0.0
-  track_grad_norm: -1
   check_val_every_n_epoch: 10
   fast_dev_run: false
   accumulate_grad_batches: null
@@ -47,25 +41,17 @@ trainer:
   val_check_interval: null
   log_every_n_steps: 1
   accelerator: gpu
-  strategy: null
+  strategy: auto
   sync_batchnorm: false
   precision: 32
   enable_model_summary: true
   num_sanity_val_steps: 0
-  resume_from_checkpoint: null
   profiler: null
   benchmark: null
   deterministic: null
   reload_dataloaders_every_n_epochs: 0
-  auto_lr_find: false
-  replace_sampler_ddp: true
   detect_anomaly: false
-  auto_scale_batch_size: false
   plugins: null
-  amp_backend: null
-  amp_level: null
-  move_metrics_to_cpu: false
-  multiple_trainloader_mode: max_size_cycle
   inference_mode: true
 model:
   encoder_class_path: models.enc.VocoderParameterEncoderInterface
@@ -98,7 +84,7 @@ model:
           window: hanning
           conv_method: direct
           n_mag: 80
-      end_filter: 
+      end_filter:
         class_path: models.ctrl.PassThrough
   feature_trsfm:
     class_path: ltng.vocoder.ScaledLogMelSpectrogram
@@ -121,9 +107,9 @@ model:
     class_path: loss.spec.MSSLoss
     init_args:
       n_ffts:
-      - 1024
-      - 2048
-      - 512
+        - 1024
+        - 2048
+        - 512
       alpha: 1.0
       ratio: 1.0
       overlap: 0.75
@@ -158,8 +144,8 @@ optimizer:
   init_args:
     lr: 0.0005
     betas:
-    - 0.9
-    - 0.999
+      - 0.9
+      - 0.999
     eps: 1.0e-08
     weight_decay: 0.0
     amsgrad: false

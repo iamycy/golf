@@ -133,7 +133,20 @@ def load_ismir_ckpt(model_configs, ckpt_path, device):
 
 
 def ismir_rtf(model_configs, ckpt_path, device, x, test_duration, num):
-    model = load_ismir_ckpt(model_configs, ckpt_path, device)
+    # model = load_ismir_ckpt(model_configs, ckpt_path, device)
+    model_configs["feature_trsfm"]["init_args"]["sample_rate"] = model_configs[
+        "sample_rate"
+    ]
+    model_configs["feature_trsfm"]["init_args"]["window"] = model_configs["window"]
+    model_configs["feature_trsfm"]["init_args"]["hop_length"] = model_configs[
+        "hop_length"
+    ]
+
+    model_configs = dict2object(model_configs)
+    model = DDSPVocoder(**model_configs).to(device)
+    ckpt = torch.load(ckpt_path, map_location=device)
+    model.load_state_dict(ckpt["state_dict"])
+
     model.eval()
 
     # get mel

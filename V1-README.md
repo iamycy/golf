@@ -28,8 +28,29 @@ python main.py fit --config config.yaml --dataset.wav_dir output_dir
 ### Objective Evaluation
 
 ```bash
-python main.py test --config config.yaml --ckpt_path checkpoint.ckpt --data.duration 6 --data.overlap 0 --data.batch_size 16
+python main.py test --config config.yaml --ckpt_path checkpoint.ckpt --data.duration 6 --data.overlap 0 --data.batch_size 16 --trainer.logger false
 ```
+
+Due to incremental changes and improvements I made since 2023, the evaluation results **may not be exactly the same** as the ones reported in the ISMIR paper.
+Below are the results I got from the latest version of the code using the checkpoints from the ISMIR paper:
+
+#### f1
+
+| Model | MSSTFT | MAE-f0 (cent) | FAD |
+| ----- |:------:|:-------------:|:---:|
+| DDSP | 3.09 | ~~74.47~~ 65.36 | 
+| SawSing | 3.12 | ~~78.91~~ 82.25 |
+| GOLF | ~~3.21~~ 3.35 | ~~77.06~~ 64.22 | 
+| PULF | ~~3.27~~ 3.29 | ~~76.90~~ 67.66 |
+
+#### m1
+
+| Model | MSSTFT | MAE-f0 (cent) | FAD |
+| ----- |:------:|:-------------:|:---:|
+| DDSP | 3.12 | ~~52.95~~ 47.16 | 
+| SawSing | 3.13 | ~~56.46~~ 58.66 | 
+| GOLF | ~~3.26~~ 3.37 | ~~54.09~~ 49.11 |
+| PULF | ~~3.35~~ 3.41 | ~~54.60~~  49.92 |
 
 ### Real-Time Factor
 
@@ -40,6 +61,8 @@ python test_rtf.py config.yaml checkpoint.ckpt test.wav
 ## Checkpoints
 
 ### Female(f1)
+
+> **_Note:_** Please use the checkpoints with `*converted*` in the name for the latest version of the code.
 
 - [DDSP](ckpts/ismir23/ddsp_f1/)
 - [SawSing](ckpts/ismir23/sawsing_f1/)

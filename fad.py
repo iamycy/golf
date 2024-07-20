@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 from itertools import chain
 from fadtk.model_loader import ModelLoader
+from fadtk import VGGishModel
 from fadtk.fad import FrechetAudioDistance, log
 from fadtk.fad_batch import cache_embedding_files
 
@@ -79,12 +80,20 @@ if __name__ == "__main__":
     parser.add_argument("baseline", type=str, help="The baseline dataset")
     parser.add_argument("eval", type=str, help="The directory to evaluate against")
     parser.add_argument("--csv", type=str, help="The CSV file to write results to")
+    parser.add_argument("--model", type=str, choices=["dac", "vggish"], default="dac")
 
     # Add optional arguments
     parser.add_argument("-w", "--workers", type=int, default=4)
 
     args = parser.parse_args()
-    model = DAC24kModel()
+
+    match args.model:
+        case "vggish":
+            model = VGGishModel()
+        case "dac":
+            model = DAC24kModel()
+        case _:
+            raise ValueError("Invalid model")
 
     baseline = Path(args.baseline)
     eval_ = Path(args.eval)

@@ -58,7 +58,7 @@ python autoencode.py test --model ltng.ae.VoiceAutoEncoder -c {YOUR_CONFIG}.yaml
 For PESQ/FAD evaluation, you'll first need to store the synthesised waveforms in a directory. Replace `{YOUR_CONFIG}`, `{YOUR_CHECKPOINT}`, and `{YOUR_OUTPUT_DIR}` with the corresponding configuration file, checkpoint, and output directory.
 
 ```bash
-python autoencode.py predict -c {YOUR_CONFIG}.yaml --ckpt_path {YOUR_CHECKPOINT}.ckpt --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=autoencode.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
+python autoencode.py predict -c {YOUR_CONFIG}.yaml --ckpt_path {YOUR_CHECKPOINT}.ckpt --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=ltng.cli.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
 ```
 
 Make a new directory and copy the following eight speakers, which form the test set, from `data/vctk`.

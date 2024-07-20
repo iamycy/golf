@@ -27,8 +27,34 @@ python main.py fit --config config.yaml --dataset.wav_dir output_dir
 
 ### Objective Evaluation
 
+#### MSS/MAE-f0
+
 ```bash
 python main.py test --config config.yaml --ckpt_path checkpoint.ckpt --data.duration 6 --data.overlap 0 --data.batch_size 16 --trainer.logger false
+```
+
+#### FAD
+
+First, store the synthesised waveforms in a directory.
+
+```bash
+python autoencode.py predict -c config.yaml --ckpt_path checkpoint.ckpt --trainer.logger false --seed_everything false --data.wav_dir output_dir --trainer.callbacks+=ltng.cli.MyPredictionWriter --trainer.callbacks.output_dir pred_dir
+```
+
+Make a new directory and copy the first three files of the `f1` (or `m1`), like the following:
+```
+mpop600-test-f1
+├── f1
+│   ├── 001.wav
+│   ├── 002.wav
+│   └── 003.wav
+```
+Please also put your synthesised wavs under `pred_dir/f1` to make it compatible with the script `fad.py`.
+
+Then, run the following command to calculate the FAD score.
+
+```bash
+python fad.py mpop600-test-f1 pred_dir --model vggish
 ```
 
 Due to incremental changes and improvements I made since 2023, the evaluation results **may not be exactly the same** as the ones reported in the ISMIR paper.
@@ -38,19 +64,19 @@ Below are the results I got from the latest version of the code using the checkp
 
 | Model | MSSTFT | MAE-f0 (cent) | FAD |
 | ----- |:------:|:-------------:|:---:|
-| DDSP | 3.09 | ~~74.47~~ 65.36 | 
-| SawSing | 3.12 | ~~78.91~~ 82.25 |
-| GOLF | ~~3.21~~ 3.35 | ~~77.06~~ 64.22 | 
-| PULF | ~~3.27~~ 3.29 | ~~76.90~~ 67.66 |
+| DDSP | 3.09 | ~~74.47~~ 65.36 | ~~0.50~~ 0.44 |
+| SawSing | 3.12 | ~~78.91~~ 82.25 | ~~0.38~~ 0.40 |
+| GOLF | ~~3.21~~ 3.35 | ~~77.06~~ 64.22 | ~~0.62~~ 0.57 |
+| PULF | ~~3.27~~ 3.29 | ~~76.90~~ 67.66 | ~~0.75~~ 0.73 |
 
 #### m1
 
 | Model | MSSTFT | MAE-f0 (cent) | FAD |
 | ----- |:------:|:-------------:|:---:|
-| DDSP | 3.12 | ~~52.95~~ 47.16 | 
-| SawSing | 3.13 | ~~56.46~~ 58.66 | 
-| GOLF | ~~3.26~~ 3.37 | ~~54.09~~ 49.11 |
-| PULF | ~~3.35~~ 3.41 | ~~54.60~~  49.92 |
+| DDSP | 3.12 | ~~52.95~~ 47.16 | ~~0.57~~ 0.56 |
+| SawSing | 3.13 | ~~56.46~~ 58.66 | ~~0.48~~ 0.50 |
+| GOLF | ~~3.26~~ 3.37 | ~~54.09~~ 49.11 | ~~0.67~~ 0.74 |
+| PULF | ~~3.35~~ 3.41 | ~~54.60~~  49.92 | ~~1.11~~ 1.04 |
 
 ### Real-Time Factor
 

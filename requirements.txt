@@ -8,11 +8,11 @@ tqdm
 matplotlib
 kazane
 torch_fftconv
-pyword
+pyworld
 pysptk
 diffsptk
 pyloudnorm
 soxr
 soundfile
 fadtk
-frechet_audio_distance
+pesq

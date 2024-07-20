@@ -346,3 +346,38 @@ class DDSPVocoder(pl.LightningModule):
         )
         delattr(self, "tmp_test_outputs")
         return
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=None):
+        x, _, rel_path = batch
+
+        assert x.shape[0] == 1, "batch size must be 1 for inference"
+        # hard coded 6 duration and 0.3 seconds overlap
+        frame_length = 6 * self.sample_rate
+        hop_length = int(5.7 * self.sample_rate)
+        overlap = frame_length - hop_length
+
+        h = F.pad(x, (0, frame_length))
+
+        h = h.unfold(1, frame_length, hop_length).squeeze(0)
+
+        feats = self.feature_trsfm(h)
+
+        _, x_hat, _ = self(feats)
+
+        x_hat = x_hat[:, :frame_length]
+        if x_hat.shape[1] < frame_length:
+            overlap = x_hat.shape[1] - hop_length
+            frame_length = x_hat.shape[1]
+        p = torch.arange(overlap, device=x.device) / overlap
+
+        ola = x.new_zeros((1, hop_length * (x_hat.shape[0] - 1) + frame_length))
+        for i in range(x_hat.shape[0]):
+            addon = x_hat[i].clone()
+            if i:
+                ola[:, i * hop_length : i * hop_length + overlap] *= 1 - p
+                addon[:overlap] *= p
+            ola[:, i * hop_length : i * hop_length + frame_length] += addon
+
+        ola = ola[:, : x.shape[1]]
+
+        return AudioTensor(ola), None

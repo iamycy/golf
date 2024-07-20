@@ -10,6 +10,52 @@ from datasets.mir1k import MIR1KDataset
 from datasets.mpop600 import MPop600Dataset
 
 
+class MPop600InferenceDataset(Dataset):
+    def __init__(self, wav_dir: str, split: str = "train"):
+        super().__init__()
+        wav_dir = pathlib.Path(wav_dir)
+        test_files = []
+        valid_files = []
+        train_files = []
+        for f in wav_dir.glob("*.wav"):
+            singer, postfix = f.name.split("_")
+            if postfix in MPop600Dataset.test_file_postfix:
+                test_files.append(f)
+            elif postfix in MPop600Dataset.valid_file_postfix:
+                valid_files.append(f)
+            else:
+                train_files.append(f)
+
+        if split == "train":
+            self.files = train_files
+        elif split == "valid":
+            self.files = valid_files
+        elif split == "test":
+            self.files = test_files
+        else:
+            raise ValueError(f"Unknown split: {split}")
+
+        self.wav_dir = wav_dir
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, index):
+        filename: pathlib.Path = self.files[index]
+        y, sr = sf.read(filename)
+        f0 = np.loadtxt(filename.with_suffix(".pv"))
+
+        tp = np.arange(len(f0)) * sr // 200
+        t = np.arange(y.shape[0])
+        interp_f0 = np.interp(t, tp, f0)
+
+        f0 = np.where(f0 < 80, 0, f0)
+        # base file name
+        rel_path = filename.relative_to(self.wav_dir)
+
+        return y.astype(np.float32), interp_f0.astype(np.float32), str(rel_path)
+
+
 class LJSpeechDataset(MPop600Dataset):
     test_file_postfix = set(f"LJ001-{i:04d}.wav" for i in range(1, 21))
     valid_file_postfix = set(f"LJ001-{i:04d}.wav" for i in range(21, 101))
@@ -311,6 +357,21 @@ class MPop600(LightningDataModule):
                 duration=self.hparams.duration,
                 overlap=self.hparams.overlap,
             )
+
+        if stage == "predict":
+            self.predict_dataset = MPop600InferenceDataset(
+                wav_dir=self.hparams.wav_dir,
+                split="test",
+            )
+
+    def predict_dataloader(self):
+        return DataLoader(
+            self.predict_dataset,
+            batch_size=1,
+            num_workers=1,
+            shuffle=False,
+            drop_last=False,
+        )
 
     def train_dataloader(self):
         return DataLoader(

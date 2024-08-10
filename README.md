@@ -120,7 +120,7 @@ python test_rtf.py {YOUR_CONFIG}.yaml {YOUR_CHECKPOINT}.ckpt {EXAMPLE_FILE}.wav
 - [MCD and MSS comparison table on W&B](https://api.wandb.ai/links/iamycy/qa1pckb0)
 - [Interspeech Figure 2 and some ablation observations](notebooks/interspeech/compare-spec-env.ipynb)
 - [Script to synthesise listening test samples](notebooks/interspeech/listening-samples.ipynb)
-- [Script to calculate MUSHURA scores and ANOVA](notebooks/interspeech/mushura.ipynb)
+- [Script to calculate MUSHRA scores and ANOVA](notebooks/interspeech/mushra.ipynb)
 
 
 

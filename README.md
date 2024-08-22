@@ -121,9 +121,7 @@ python test_rtf.py {YOUR_CONFIG}.yaml {YOUR_CHECKPOINT}.ckpt {EXAMPLE_FILE}.wav
 - [Interspeech Figure 2 and some ablation observations](notebooks/interspeech/compare-spec-env.ipynb)
 - [Script to synthesise listening test samples](notebooks/interspeech/listening-samples.ipynb)
 - [Script to calculate MUSHRA scores and ANOVA](notebooks/interspeech/mushra.ipynb)
-
-
-
+- [**Differentiable LP in PyTorch**](https://github.com/yoyololicon/torchlpc)
 
 ## Citation
 

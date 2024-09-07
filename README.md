@@ -136,12 +136,12 @@ If you find this code useful, please consider citing the following papers:
     pages={667--675}
 }
 
-@misc{ycy2024golf,
-    title = {Differentiable Time-Varying Linear Prediction in the Context of End-to-End Analysis-by-Synthesis},
-    author = {Yu, Chin-Yun and Fazekas, György},
-    year={2024},
-    eprint={2406.05128},
-    archivePrefix={arXiv},
-    primaryClass={eess.AS}
+@inproceedings{ycy2024golf,
+    title     = {Differentiable Time-Varying Linear Prediction in the Context of End-to-End Analysis-by-Synthesis},
+    author    = {Chin-Yun Yu and György Fazekas},
+    year      = {2024},
+    booktitle = {Proc. Interspeech},
+    pages     = {1820--1824},
+    doi       = {10.21437/Interspeech.2024-1187},
 }
 ```

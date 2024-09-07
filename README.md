@@ -133,7 +133,8 @@ If you find this code useful, please consider citing the following papers:
     author = {Yu, Chin-Yun and Fazekas, György},
     booktitle={Proc. International Society for Music Information Retrieval},
     year={2023},
-    pages={667--675}
+    pages={667--675},
+    doi={10.5281/zenodo.10265377},
 }
 
 @inproceedings{ycy2024golf,

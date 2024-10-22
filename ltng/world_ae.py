@@ -9,7 +9,7 @@ import math
 import torch.nn as nn
 from itertools import starmap
 
-from models.utils import AudioTensor
+from models.audiotensor import AudioTensor
 
 
 class WORLDAutoEncoder(pl.LightningModule):

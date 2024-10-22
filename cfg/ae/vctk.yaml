@@ -14,7 +14,7 @@ trainer:
         save_last: true
         monitor: val_loss
         save_on_train_epoch_end: false
-        filename: '{epoch}-{step}-{val_loss:.3f}'
+        filename: "{epoch}-{step}-{val_loss:.3f}"
         save_top_k: 3
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
@@ -38,15 +38,15 @@ model:
     n_fft: 1024
     hop_length: 240
     channels:
-    - 32
-    - 64
-    - 128
-    - 256
+      - 32
+      - 64
+      - 128
+      - 256
     strides:
-    - 4
-    - 4
-    - 4
-    - 4
+      - 4
+      - 4
+      - 4
+      - 4
     lstm_hidden_size: 256
     num_layers: 3
     dropout: 0.1
@@ -74,7 +74,7 @@ data:
   class_path: ltng.data.VCTK
   init_args:
     batch_size: 64
-    wav_dir:  /import/c4dm-datasets-ext/ycy_artefacts/VCTK-24k/
+    wav_dir: /import/c4dm-datasets-ext/ycy_artefacts/VCTK-24k/
     duration: 2.0
     overlap: 1.5
 optimizer:

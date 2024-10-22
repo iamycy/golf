@@ -19,7 +19,7 @@ trainer:
       project: vctk-ae
       log_model: false
       experiment: null
-      prefix: ''
+      prefix: ""
       checkpoint_name: null
       job_type: null
       config: null
@@ -41,35 +41,35 @@ trainer:
       save_code: null
       settings: null
   callbacks:
-  - class_path: lightning.pytorch.callbacks.ModelCheckpoint
-    init_args:
-      dirpath: null
-      filename: '{epoch}-{step}-{val_loss:.3f}'
-      monitor: val_loss
-      verbose: false
-      save_last: true
-      save_top_k: 3
-      save_weights_only: false
-      mode: min
-      auto_insert_metric_name: true
-      every_n_train_steps: null
-      train_time_interval: null
-      every_n_epochs: null
-      save_on_train_epoch_end: false
-      enable_version_counter: true
-  - class_path: lightning.pytorch.callbacks.EarlyStopping
-    init_args:
-      monitor: train_loss
-      min_delta: 0.0
-      patience: 2000
-      verbose: false
-      mode: min
-      strict: true
-      check_finite: true
-      stopping_threshold: null
-      divergence_threshold: null
-      check_on_train_epoch_end: true
-      log_rank_zero_only: false
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: null
+        filename: "{epoch}-{step}-{val_loss:.3f}"
+        monitor: val_loss
+        verbose: false
+        save_last: true
+        save_top_k: 3
+        save_weights_only: false
+        mode: min
+        auto_insert_metric_name: true
+        every_n_train_steps: null
+        train_time_interval: null
+        every_n_epochs: null
+        save_on_train_epoch_end: false
+        enable_version_counter: true
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: train_loss
+        min_delta: 0.0
+        patience: 2000
+        verbose: false
+        mode: min
+        strict: true
+        check_finite: true
+        stopping_threshold: null
+        divergence_threshold: null
+        check_on_train_epoch_end: true
+        log_rank_zero_only: false
   fast_dev_run: false
   max_epochs: null
   min_epochs: null
@@ -150,9 +150,9 @@ model:
       class_path: loss.spec.MSSLoss
       init_args:
         n_ffts:
-        - 509
-        - 1021
-        - 2053
+          - 509
+          - 1021
+          - 2053
         alpha: 1.0
         ratio: 1.0
         overlap: 0.75
@@ -173,15 +173,15 @@ model:
       n_fft: 1024
       hop_length: 240
       channels:
-      - 32
-      - 64
-      - 128
-      - 256
+        - 32
+        - 64
+        - 128
+        - 256
       strides:
-      - 4
-      - 4
-      - 4
-      - 4
+        - 4
+        - 4
+        - 4
+        - 4
       lstm_hidden_size: 256
       num_layers: 3
       dropout: 0.1
@@ -206,8 +206,8 @@ optimizer:
   init_args:
     lr: 0.0001
     betas:
-    - 0.9
-    - 0.999
+      - 0.9
+      - 0.999
     eps: 1.0e-08
     weight_decay: 0.0
     amsgrad: false

@@ -1,4 +1,4 @@
-decoder: 
+decoder:
   class_path: models.sf.SourceFilterSynth
   init_args:
     harm_oscillator:

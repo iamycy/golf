@@ -28,7 +28,7 @@ python scripts/wav2f0.py data/vctk --f0-floor 60
 Below is the command to train each models in the Interspeech [paper](https://arxiv.org/abs/2406.05128).
 
 ```bash
-python autoencode.py fit --model ltng.ae.VoiceAutoEncoder --config cfg/vctk.yaml --model cfg/ae/decoder/{MODEL}.yaml --trainer.logger false
+python autoencode.py fit --model ltng.ae.VoiceAutoEncoder --config cfg/ae/vctk.yaml --model cfg/ae/decoder/{MODEL}.yaml --trainer.logger false
 ```
 
 The `{MODEL}` corresponds to the following models:
@@ -41,7 +41,7 @@ The `{MODEL}` corresponds to the following models:
 - `golf-precise` $\rightarrow$ GOLF-ss
 
 By default, the checkpoints are automatically saved under `checkpoints/` directory. 
-Feel free to remove `--trainer.logger false` and edit the logger settings in the configuration file `cfg/vctk.yaml` to fit your needs.
+Feel free to remove `--trainer.logger false` and edit the logger settings in the configuration file `cfg/ae/vctk.yaml` to fit your needs.
 Please checkout the LightningCLI instructions [here](https://lightning.ai/docs/pytorch/stable/cli/lightning_cli_advanced.html).
 
 ## Evaluation
@@ -59,7 +59,7 @@ python autoencode.py test --model ltng.ae.VoiceAutoEncoder -c {YOUR_CONFIG}.yaml
 For PESQ/FAD evaluation, you'll first need to store the synthesised waveforms in a directory. Replace `{YOUR_CONFIG}`, `{YOUR_CHECKPOINT}`, and `{YOUR_OUTPUT_DIR}` with the corresponding configuration file, checkpoint, and output directory.
 
 ```bash
-python autoencode.py predict -c {YOUR_CONFIG}.yaml --ckpt_path {YOUR_CHECKPOINT}.ckpt --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=ltng.cli.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
+python autoencode.py predict --model ltng.ae.VoiceAutoEncoder -c {YOUR_CONFIG}.yaml --ckpt_path {YOUR_CHECKPOINT}.ckpt --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=ltng.cli.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
 ```
 
 Make a new directory and copy the following eight speakers, which form the test set, from `data/vctk`.
@@ -98,8 +98,8 @@ Please use the checkpoints trained with `golf.yaml` for the GOLF-fs model. Appen
 Please use the following commands to evaluate the non-differentiable WORLD model.
 
 ```bash
-python autoencode.py test -c cfg/pyworld.yaml --data.wav_dir data/vctk --model ltng.world_ae.WORLDAutoEncoder
-python autoencode.py predict -c cfg/pyworld.yaml --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=ltng.cli.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
+python autoencode.py test -c cfg/ae/pyworld.yaml --data.wav_dir data/vctk
+python autoencode.py predict -c cfg/ae/pyworld.yaml --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=ltng.cli.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
 ```
 
 ## Checkpoints

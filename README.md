@@ -28,7 +28,7 @@ python scripts/wav2f0.py data/vctk --f0-floor 60
 Below is the command to train each models in the Interspeech [paper](https://arxiv.org/abs/2406.05128).
 
 ```bash
-python autoencode.py fit --model ltng.ae.VoiceAutoEncoder --config cfg/ae/vctk.yaml --model cfg/ae/decoder/{MODEL}.yaml --trainer.logger false
+python autoencode.py fit --config cfg/ae/vctk.yaml --model cfg/ae/decoder/{MODEL}.yaml --trainer.logger false
 ```
 
 The `{MODEL}` corresponds to the following models:
@@ -51,7 +51,7 @@ Please checkout the LightningCLI instructions [here](https://lightning.ai/docs/p
 After training the models, you can evaluate the models using the following command. Replace `{YOUR_CONFIG}` and `{YOUR_CHECKPOINT}` with the corresponding configuration file and checkpoint.
 
 ```bash
-python autoencode.py test --model ltng.ae.VoiceAutoEncoder -c {YOUR_CONFIG}.yaml --ckpt_path {YOUR_CHECKPOINT}.ckpt --data.duration 2 --data.overlap 0 --seed_everything false --data.wav_dir data/vctk --data.batch_size 32 --trainer.logger false
+python autoencode.py test -c {YOUR_CONFIG}.yaml --ckpt_path {YOUR_CHECKPOINT}.ckpt --data.duration 2 --data.overlap 0 --seed_everything false --data.wav_dir data/vctk --data.batch_size 32 --trainer.logger false
 ```
 
 ### PESQ/FAD
@@ -59,7 +59,7 @@ python autoencode.py test --model ltng.ae.VoiceAutoEncoder -c {YOUR_CONFIG}.yaml
 For PESQ/FAD evaluation, you'll first need to store the synthesised waveforms in a directory. Replace `{YOUR_CONFIG}`, `{YOUR_CHECKPOINT}`, and `{YOUR_OUTPUT_DIR}` with the corresponding configuration file, checkpoint, and output directory.
 
 ```bash
-python autoencode.py predict --model ltng.ae.VoiceAutoEncoder -c {YOUR_CONFIG}.yaml --ckpt_path {YOUR_CHECKPOINT}.ckpt --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=ltng.cli.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
+python autoencode.py predict -c {YOUR_CONFIG}.yaml --ckpt_path {YOUR_CHECKPOINT}.ckpt --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=ltng.cli.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
 ```
 
 Make a new directory and copy the following eight speakers, which form the test set, from `data/vctk`.

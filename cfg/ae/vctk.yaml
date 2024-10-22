@@ -30,45 +30,47 @@ trainer:
       project: vctk-ae
       log_model: false
 model:
-  encoder_class_path: models.enc.VocoderParameterEncoderInterface
-  encoder_init_args:
-    f0_min: 60.0
-    f0_max: 1000.0
-    backbone_type: models.unet.UNetEncoder
-    n_fft: 1024
-    hop_length: 240
-    channels:
-      - 32
-      - 64
-      - 128
-      - 256
-    strides:
-      - 4
-      - 4
-      - 4
-      - 4
-    lstm_hidden_size: 256
-    num_layers: 3
-    dropout: 0.1
-    learn_voicing: false
-    learn_f0: false
-  decoder: null
-  criterion:
-    class_path: loss.spec.MSSLoss
-    init_args:
-      n_ffts:
-        - 509
-        - 1021
-        - 2053
-      alpha: 1.0
-      window: hanning
-      center: true
-  sample_rate: 24000
-  voicing_loss_weight: 1.0
-  f0_loss_weight: 1.0
-  detach_voicing: true
-  detach_f0: true
-  train_with_true_f0: true
+  class_path: ltng.ae.VoiceAutoEncoder
+  init_args:
+    encoder_class_path: models.enc.VocoderParameterEncoderInterface
+    encoder_init_args:
+      f0_min: 60.0
+      f0_max: 1000.0
+      backbone_type: models.unet.UNetEncoder
+      n_fft: 1024
+      hop_length: 240
+      channels:
+        - 32
+        - 64
+        - 128
+        - 256
+      strides:
+        - 4
+        - 4
+        - 4
+        - 4
+      lstm_hidden_size: 256
+      num_layers: 3
+      dropout: 0.1
+      learn_voicing: false
+      learn_f0: false
+    decoder: null
+    criterion:
+      class_path: loss.spec.MSSLoss
+      init_args:
+        n_ffts:
+          - 509
+          - 1021
+          - 2053
+        alpha: 1.0
+        window: hanning
+        center: true
+    sample_rate: 24000
+    voicing_loss_weight: 1.0
+    f0_loss_weight: 1.0
+    detach_voicing: true
+    detach_f0: true
+    train_with_true_f0: true
 ckpt_path: null
 data:
   class_path: ltng.data.VCTK

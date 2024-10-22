@@ -99,7 +99,7 @@ Please use the following commands to evaluate the non-differentiable WORLD model
 
 ```bash
 python autoencode.py test -c cfg/pyworld.yaml --data.wav_dir data/vctk --model ltng.world_ae.WORLDAutoEncoder
-python autoencode.py predict -c cfg/pyworld.yaml --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=autoencode.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
+python autoencode.py predict -c cfg/pyworld.yaml --trainer.logger false --seed_everything false --data.wav_dir data/vctk --trainer.callbacks+=ltng.cli.MyPredictionWriter --trainer.callbacks.output_dir {YOUR_OUTPUT_DIR}
 ```
 
 ## Checkpoints

@@ -39,10 +39,12 @@ class HarmonicPlusNoiseSynth(Synth):
         **other_params
     ) -> AudioTensor:
         # Time-varying components
-        harm_osc = self.harm_oscillator(phase, *harm_oscillator_params)
         if voicing is not None:
             assert torch.all(voicing >= 0) and torch.all(voicing <= 1)
-            harm_osc = harm_osc * voicing
+            # harm_osc = harm_osc * voicing
+            phase = phase * voicing
+
+        harm_osc = self.harm_oscillator(phase, *harm_oscillator_params)
 
         noise = self.noise_generator(harm_osc, *noise_generator_params)
 

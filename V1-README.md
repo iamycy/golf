@@ -57,26 +57,26 @@ Then, run the following command to calculate the FAD score.
 python fad.py mpop600-test-f1 pred_dir --model vggish
 ```
 
-Due to incremental changes and improvements I made since 2023, the evaluation results **may not be exactly the same** as the ones reported in the ISMIR paper.
-Below are the results I got from the latest version of the code using the checkpoints from the ISMIR paper:
+Due to incremental changes and improvements I made since 2023, the evaluation results (MSSTFT and MAE-f0)  maybe **slightly different** from the ones reported in the ISMIR paper.
+Since we changed to use `fadtk` for the FAD evaluation, we report the new FAD scores here.
 
 #### f1
 
-| Model | MSSTFT | MAE-f0 (cent) | FAD |
-| ----- |:------:|:-------------:|:---:|
-| DDSP | 3.09 | ~~74.47~~ 65.36 | ~~0.50~~ 0.44 |
-| SawSing | 3.12 | ~~78.91~~ 82.25 | ~~0.38~~ 0.40 |
-| GOLF | ~~3.21~~ 3.35 | ~~77.06~~ 64.22 | ~~0.62~~ 0.57 |
-| PULF | ~~3.27~~ 3.29 | ~~76.90~~ 67.66 | ~~0.75~~ 0.73 |
+| Model   | FAD           |
+| ------- |:-------------:|
+| DDSP    | ~~0.50~~ 0.47 |
+| SawSing | ~~0.38~~ 0.32 |
+| GOLF    | ~~0.62~~ 0.59 |
+| PULF    | ~~0.75~~ 0.76 |
 
 #### m1
 
-| Model | MSSTFT | MAE-f0 (cent) | FAD |
-| ----- |:------:|:-------------:|:---:|
-| DDSP | 3.12 | ~~52.95~~ 47.16 | ~~0.57~~ 0.56 |
-| SawSing | 3.13 | ~~56.46~~ 58.66 | ~~0.48~~ 0.50 |
-| GOLF | ~~3.26~~ 3.37 | ~~54.09~~ 49.11 | ~~0.67~~ 0.74 |
-| PULF | ~~3.35~~ 3.41 | ~~54.60~~  49.92 | ~~1.11~~ 1.04 |
+| Model   | FAD           |
+| ------- |:-------------:|
+| DDSP    | ~~0.57~~ 0.56 |
+| SawSing | ~~0.48~~ 0.44 |
+| GOLF    | ~~0.67~~ 0.74 |
+| PULF    | ~~1.11~~ 1.26 |
 
 ### Real-Time Factor
 

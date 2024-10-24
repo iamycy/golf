@@ -5,7 +5,8 @@ import torchaudio
 import yaml
 from tqdm import tqdm
 
-from test_rtf import load_ismir_ckpt
+from ltng.vocoder import DDSPVocoder
+from test_rtf import dict2object
 
 
 def loader(congif_path, ckpt_path):
@@ -13,7 +14,20 @@ def loader(congif_path, ckpt_path):
         model_configs = yaml.safe_load(f)["model"]
         # print(model_configs)
 
-    return load_ismir_ckpt(model_configs, ckpt_path, "cpu")
+    # return load_ismir_ckpt(model_configs, ckpt_path, "cpu")
+    model_configs["feature_trsfm"]["init_args"]["sample_rate"] = model_configs[
+        "sample_rate"
+    ]
+    model_configs["feature_trsfm"]["init_args"]["window"] = model_configs["window"]
+    model_configs["feature_trsfm"]["init_args"]["hop_length"] = model_configs[
+        "hop_length"
+    ]
+
+    model_configs = dict2object(model_configs)
+    model = DDSPVocoder(**model_configs)
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    model.load_state_dict(ckpt["state_dict"])
+    return model
 
 
 @torch.no_grad()
@@ -30,8 +44,10 @@ def harms_and_noise(m, x, sr):
     voicing_logits = params.pop("voicing_logits")
     voicing = torch.sigmoid(voicing_logits)
 
+    phase = phase * voicing
+
     harm_osc = dec.harm_oscillator(phase, *params["harm_oscillator_params"])
-    harm_osc = harm_osc * voicing
+    # harm_osc = harm_osc * voicing
 
     noise = dec.noise_generator(harm_osc, *params["noise_generator_params"])
 

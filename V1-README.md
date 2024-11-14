@@ -1,6 +1,6 @@
 # The GOLF vocoder for singing voice synthesis
 
-> **_Note:_** The latest version of the code should be capable of loading the old checkpoints (under `ckpts/ismir23/ismir23`), but the training for the v1 vocoder is not guaranteed to work. We're working on it. If you want to use the old code base that was made for the ISMIR 2023 paper, please checkout the [ismir23](https://github.com/yoyololicon/golf/releases/tag/ismir23) tag or commit `6d323da`.
+> **_Note:_** The latest version of the code should be capable of loading the old checkpoints (under `ckpts/ismir23/`), but the training for the v1 vocoder is not guaranteed to work. We're working on it. If you want to use the old code base that was made for the ISMIR 2023 paper, please checkout the [ismir23](https://github.com/yoyololicon/golf/releases/tag/ismir23) tag or commit `6d323da`.
 
 
 ## Data preparation
@@ -103,10 +103,31 @@ python test_rtf.py config.yaml checkpoint.ckpt test.wav
 - [PULF](ckpts/ismir23/pulse_m1/)
 
 
+## Ablation Study
+
+The belows are commands to extract intermediate features from the vocoders for the ablation study.
+Please check [this notebook](notebooks/tismir/ablation.ipynb) for some analysis on the extracted features.
+
+### Separate the harmonic and noise components
+
+```bash
+python harm_and_noise.py ckpts/ismir23/*/config.yaml ckpts/ismir23/*_f1/*_converted.ckpt dir/to/f1 result_dir
+```
+The above command will save the harmonic and noise components of the test set of f1 , predicted by the vocoder with a frame size of 6 seconds and one second overlap, in `result_dir`.
+
+### Extract the biquad coefficients from GOLF and PULF
+
+```bash
+python biquads.py ckpts/ismir23/{glottal_d_*, pulse_*}/config.yaml ckpts/ismir23/{glottal_d_*, pulse_*}/*_converted.ckpt dir/to/{f1, m1} result.pt
+```
+The above command will save the biquad coefficients of LPC from the test set of either f1 or m1, predicted by the vocoder with a frame size of 6 seconds without overlap, in `result.pt` that can be loaded by PyTorch.
+
+
 ## Additional links
 
 - [Compute MUSHRA scores given the rating file from GO Listen](notebooks/ismir/mushra.ipynb)
 - [Time-domain l2 experiment](notebooks/ismir/time_l2.ipynb)
+- [TISMIR ablation study](notebooks/tismir/ablation.ipynb)
 
 
 ## Citation

@@ -118,8 +118,9 @@ The above command will save the harmonic and noise components of the test set of
 ### Extract the biquad coefficients from GOLF and PULF
 
 ```bash
-python biquads.py ckpts/ismir23/{glottal_d_*, pulse_*}/config.yaml ckpts/ismir23/{glottal_d_*, pulse_*}/*_converted.ckpt dir/to/{f1, m1} result_dir
+python biquads.py ckpts/ismir23/{glottal_d_*, pulse_*}/config.yaml ckpts/ismir23/{glottal_d_*, pulse_*}/*_converted.ckpt dir/to/{f1, m1} result.pt
 ```
+The above command will save the biquad coefficients of LPC from the test set of either f1 or m1, predicted by the vocoder with a frame size of 6 seconds without overlap, in `result.pt` that can be loaded by PyTorch.
 
 
 ## Additional links
